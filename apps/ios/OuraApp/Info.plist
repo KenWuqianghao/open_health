@@ -27,15 +27,22 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>md.thomas.openoura.sync.refresh</string>
+		<string>md.thomas.openoura.sync.processing</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Open Oura connects to your Oura ring over Bluetooth to read your health data on-device.</string>
+	<string>Open Oura connects to your Oura ring over Bluetooth, also in the background, to sync your health data on this device.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Open Oura connects to your Oura ring over Bluetooth to read your health data on-device.</string>
+	<string>Open Oura connects to your Oura ring over Bluetooth, also in the background, to sync your health data on this device.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Open Oura can read selected Apple Health data to compare it with your ring metrics on-device.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Open Oura uses write access only when you choose to export ring-derived sleep, activity, and heart measurements to Apple Health.</string>
+	<string>Open Oura writes your ring measurements (sleep, heart rate, breathing rate, blood oxygen, steps, energy, and workouts) to Apple Health only when you turn on Health export.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

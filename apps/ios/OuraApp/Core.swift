@@ -32,6 +32,17 @@ enum SummaryCache {
 }
 
 enum Core {
+    /// The Apple Health sample bundles from the shared brain. `sinceUnix` trims the
+    /// JSON to days whose data changed after that capture time.
+    static func healthSamples(sinceUnix: Int64?) -> HealthEnvelope {
+        let json = healthSamplesJson(dbPath: DB.readPath(), tzOffsetS: Int64(TimeZone.current.secondsFromGMT()),
+                                     sinceUnix: sinceUnix)
+        guard let data = json.data(using: .utf8),
+              let env = try? JSONDecoder().decode(HealthEnvelope.self, from: data)
+        else { return HealthEnvelope(error: "decode failed") }
+        return env
+    }
+
     /// Fast, model-free summary (vitals, activity ridges, device) straight from the
     /// shared-core JSON — safe to compute on a background queue and show immediately.
     static func base() -> Summary {

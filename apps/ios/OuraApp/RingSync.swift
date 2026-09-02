@@ -187,9 +187,9 @@ enum IdleTimerLock {
     }
 }
 
-// On-device BLE sync: connect to the ring over CoreBluetooth (BLETransport), then
-// drive the SAME Rust client over FFI (RingSession) to authenticate + drain history
-// events into a writable SQLite DB. Mirrors `oura sync` on desktop. The actual BLE
+// On-device BLE sync: `SyncCoordinator` connects through `RingCentral`, then drives
+// the SAME Rust client over FFI (RingSession) to authenticate + drain history events
+// into a writable SQLite DB. Mirrors `oura sync` on desktop. The actual BLE
 // round-trip only works on a physical device (no Bluetooth in the simulator).
 
 /// Where the app reads/writes its SQLite DB. The synced DB lives in Application
@@ -216,27 +216,58 @@ enum DB {
     }
 }
 
-/// The ring auth key (exported from the desktop client) kept in the Keychain.
+/// The ring's 16-byte auth key, kept in the Keychain. Made on this phone at pairing
+/// time (`KeyGen`), never in a file. Readable AFTER FIRST UNLOCK: background syncs
+/// run while the phone is locked, and a key that could not be read would look like
+/// an unpaired ring. Not `ThisDeviceOnly`: the key must survive an encrypted backup
+/// restore, because losing it costs a factory reset.
 enum Keychain {
     private static let account = "ring-auth-key"
+    private static var base: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrAccount as String: account]
+    }
+
     static func saveKey(_ hex: String) {
         let data = Data(hex.utf8)
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrAccount as String: account]
         SecItemDelete(base as CFDictionary)
         var add = base
         add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess { dlog("keychain", "save failed: \(status)") }
     }
+
     static func loadKey() -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrAccount as String: account,
-                                kSecReturnData as String: true,
-                                kSecMatchLimit as String: kSecMatchLimitOne]
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
               let data = out as? Data, let s = String(data: data, encoding: .utf8) else { return nil }
         return s
+    }
+
+    static func deleteKey() {
+        SecItemDelete(base as CFDictionary)
+    }
+
+    /// Re-add a key saved by an older build (default `WhenUnlocked` accessibility)
+    /// so background syncs can read it. Call only while protected data is available.
+    static func migrateAccessibilityIfNeeded() {
+        var q = base
+        q[kSecReturnAttributes as String] = true
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let item = out as? [String: Any] else { return }
+        let accessible = item[kSecAttrAccessible as String] as? String
+        guard accessible != (kSecAttrAccessibleAfterFirstUnlock as String),
+              let data = item[kSecValueData as String] as? Data,
+              let hex = String(data: data, encoding: .utf8) else { return }
+        saveKey(hex)
+        dlog("keychain", "auth key accessibility migrated to after-first-unlock")
     }
 }
 
@@ -282,71 +313,53 @@ final class SyncProgressBridge: SyncProgressListener, @unchecked Sendable {
     }
 }
 
-/// Orchestrates a sync and exposes progress to the UI.
+/// The UI face of the sync: status, progress, results, history. All work happens in
+/// `SyncCoordinator`; this object only publishes what it reports.
 @MainActor
 final class RingSync: ObservableObject {
+    static let shared = RingSync()
+
     @Published var status: String = ""
     @Published var busy = false
+    @Published var trigger: SyncTrigger?
     @Published var lastReport: SyncReport?
     @Published private(set) var lastSuccessfulSyncAt: Date?
+    @Published var history: [SyncMetrics] = SyncHistoryStore.load()
+    @Published var backgroundRefreshDenied = false
+    @Published var otherAppHoldsRing = false
 
-    /// A launch/foreground refresh is useful, but reconnecting twice while someone
-    /// briefly switches apps is not. Manual sync remains available at any time.
-    static let automaticSyncCooldown: TimeInterval = 3 * 60
-    private static let lastSuccessfulSyncKey = "ring.last-successful-sync-at"
-    // Set the moment a drain reports real progress, cleared only on a completed
-    // sync — so it survives an app kill mid-drain and distinguishes "interrupted
-    // with data on the ring" (resume eagerly) from "never reached the ring".
-    private static let syncIncompleteKey = "ring.sync-incomplete"
+    static let automaticSyncCooldown: TimeInterval = SyncCoordinator.automaticSyncCooldown
 
-    private var transport: BLETransport?
-    private var session: RingSession?
-    private var pump: Task<Void, Never>?
     private var lastProgressBytes: UInt64?
     private var lastProgressAt: Date?
     private var smoothedBytesPerSecond: Double?
-    private var lastAutomaticAttemptAt: Date?
-    private var markedIncompleteThisRun = false
 
-    var hasIncompleteSync: Bool {
-        UserDefaults.standard.bool(forKey: Self.syncIncompleteKey)
-    }
-
-    private func clearIncompleteSync() {
-        UserDefaults.standard.removeObject(forKey: Self.syncIncompleteKey)
-    }
-
-    init() {
-        let timestamp = UserDefaults.standard.double(forKey: Self.lastSuccessfulSyncKey)
-        lastSuccessfulSyncAt = timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
+    private init() {
+        let t = UserDefaults.standard.double(forKey: "ring.last-successful-sync-at")
+        lastSuccessfulSyncAt = t > 0 ? Date(timeIntervalSince1970: t) : nil
+        backgroundRefreshDenied = UIApplication.shared.backgroundRefreshStatus != .available
     }
 
     var wasRecentlySynced: Bool {
         lastSuccessfulSyncAt.map { Date().timeIntervalSince($0) < Self.automaticSyncCooldown } ?? false
     }
 
-    /// Opportunistic refresh used at launch and when returning to the app. It never
-    /// prompts for a key. Normally a timid single attempt behind a cooldown — but
-    /// when the last sync was interrupted mid-drain, the checkpointed cursor means
-    /// data is sitting half-transferred on the ring, so resume eagerly with the
-    /// retry loop instead of silently giving up.
-    func syncAutomaticallyIfNeeded(now: Date = Date()) async -> SyncReport? {
-        guard !busy, let key = Keychain.loadKey() else { return nil }
-        let resuming = hasIncompleteSync
-        if !resuming,
-           let successful = lastSuccessfulSyncAt,
-           now.timeIntervalSince(successful) < Self.automaticSyncCooldown {
-            return nil
-        }
-        // A failed scan should not immediately restart because scenePhase bounced.
-        if let attempted = lastAutomaticAttemptAt, now.timeIntervalSince(attempted) < 60 {
-            return nil
-        }
-        lastAutomaticAttemptAt = now
-        if resuming { status = "resuming interrupted sync from checkpoint…" }
-        return await run(keyHex: key,
-                         maxAttempts: resuming ? 3 : 1,
-                         source: resuming ? "resume" : "automatic")
+    var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: "ring.sync-incomplete") }
+    var isPaired: Bool { PairedRingStore.load() != nil && Keychain.loadKey() != nil }
+
+    /// A manual sync from the UI.
+    @discardableResult
+    func run() async -> SyncReport? {
+        await SyncCoordinator.shared.sync(trigger: .manual).report
+    }
+
+    func syncAutomaticallyIfNeeded() async -> SyncReport? {
+        if hasIncompleteSync { status = "resuming interrupted sync from checkpoint…" }
+        return await SyncCoordinator.shared.automaticSyncIfNeeded().report
+    }
+
+    func cancel() {
+        Task { await SyncCoordinator.shared.cancelCurrent(reason: .cancelled) }
     }
 
     func resetLocalDatabase() {
@@ -354,9 +367,9 @@ final class RingSync: ObservableObject {
             try DB.resetWritableStore()
             lastReport = nil
             lastSuccessfulSyncAt = nil
-            UserDefaults.standard.removeObject(forKey: Self.lastSuccessfulSyncKey)
-            clearIncompleteSync()
-            status = "local sync database reset — run Connect & Sync again"
+            UserDefaults.standard.removeObject(forKey: "ring.last-successful-sync-at")
+            UserDefaults.standard.removeObject(forKey: "ring.sync-incomplete")
+            status = "local sync database reset — the next sync drains the ring from the start"
             dlog("db", "writable sync database reset")
         } catch {
             status = "reset failed: \(error.localizedDescription)"
@@ -364,135 +377,61 @@ final class RingSync: ObservableObject {
         }
     }
 
-    /// Connect, wire the inbound-frame pump, and run a full sync into the writable DB.
-    @discardableResult
-    func run(keyHex: String, maxAttempts: Int = 6, source: String = "manual") async -> SyncReport? {
-        guard !busy else { return nil }
-        lastReport = nil   // clear any prior success so a failed retry isn't read as one
+    // ── called by SyncCoordinator ──
+
+    func begin(trigger: SyncTrigger) {
+        busy = true
+        self.trigger = trigger
+        lastReport = nil
         lastProgressBytes = nil
         lastProgressAt = nil
         smoothedBytesPerSecond = nil
-        // one attempt = one transcript, so a copied log is unambiguous about which run
-        // it describes.
-        RingDiag.shared.clear()
-        let key = keyHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A SHA-256-derived fingerprint confirms the *right* key arrived intact without
-        // exposing any key bytes (a raw slice would leak key material).
-        let fp = SHA256.hash(data: Data(key.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
-        let hexOk = key.allSatisfy(\.isHexDigit)
-        dlog("sync", "run source=\(source) — key len=\(key.count), hex=\(hexOk), fp(sha256)=\(fp)")
-        guard key.count == 32, key.allSatisfy(\.isHexDigit) else {
-            dlog("sync", "rejected key: len=\(key.count) (need 32 hex chars)")
-            status = "key must be 32 hex characters"
-            return nil
-        }
-        busy = true
-        markedIncompleteThisRun = false
-        // A multi-hour first sync must not die because the screen locked; SyncView
-        // refreshes this when the app becomes active again.
-        IdleTimerLock.acquire("ring-sync")
-        defer {
-            busy = false
-            IdleTimerLock.release("ring-sync")
-            pump?.cancel()
-            pump = nil
-            // release the ring's single BLE link — holding it after the sync would
-            // stop the ring advertising for the official app, the Mac, AND our own
-            // next scan (it would look like "no ring advertisement seen").
-            transport?.disconnect()
-            transport = nil
-            session = nil
-        }
+        backgroundRefreshDenied = UIApplication.shared.backgroundRefreshStatus != .available
+    }
 
-        // The drain checkpoints its cursor after every batch, so each retry RESUMES
-        // where the link dropped rather than starting over — reconnect-and-retry is
-        // safe and cheap. Retries cover both connect failures and mid-sync drops.
-        for attempt in 1...maxAttempts {
-            if attempt > 1 {
-                dlog("sync", "attempt \(attempt)/\(maxAttempts) — resuming from the checkpointed cursor in 3 s")
-                status = "connection lost — resuming (attempt \(attempt)/\(maxAttempts))…"
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+    func set(status: String) { self.status = status }
+    func set(history: [SyncMetrics]) { self.history = history }
+    func set(otherAppHoldsRing: Bool) { self.otherAppHoldsRing = otherAppHoldsRing }
+
+    func finishFailure(trigger: SyncTrigger, outcome: SyncOutcome, attempts: Int) {
+        switch outcome {
+        case .synced: break
+        case .partial(let exit):
+            status = "sync paused (\(exit.rawValue)) — progress is saved, the next sync resumes"
+        case .skipped(let exit):
+            switch exit {
+            case .notPaired: status = "no ring paired yet"
+            case .noKey: status = "the auth key is not readable yet — unlock the phone once"
+            case .busy: break
+            default: status = ""
             }
-
-            status = attempt == 1 ? "connecting to ring…" : "reconnecting to ring…"
-            dlog("sync", "connecting — scanning for the Oura service (name filter 'Oura')…")
-            // fresh transport + session per attempt: the previous link is dead and
-            // BLETransport's notification stream is per-connection.
-            let t = BLETransport(nameContains: "Oura")
-            transport = t
-            do {
-                try await t.connect()
-            } catch {
-                dlog("sync", "BLE connect FAILED: \(error)")
-                // the ring advertises reliably only ON its charger (low-power adv when
-                // worn), and it has a single BLE link — a phone running the official
-                // app holds it, leaving nothing to discover.
-                status = "couldn't connect (\(error)) — put the ring on its charger and " +
-                    "turn off Bluetooth on the phone with the official Oura app"
-                continue
-            }
-            dlog("sync", "BLE link ready — creating RingSession + inbound-frame pump")
-
-            let s = RingSession(writer: RingWriter(t))
-            session = s
-            pump?.cancel()
-            pump = Task { for await frame in t.notifications { s.pushFrame(data: frame) } }
-
-            status = "syncing…"
-            dlog("sync", "starting FFI sync() — authenticate, app stream, then event drain")
-            do {
-                let progress = SyncProgressBridge { [weak self] stage, bytesLeft, events in
-                    self?.showProgress(stage: stage, bytesLeft: bytesLeft, events: events)
-                }
-                let report = try await s.sync(dbPath: DB.url.path, keyHex: key, progress: progress)
-                Keychain.saveKey(key)
-                lastReport = report
-                let completedAt = Date()
-                lastSuccessfulSyncAt = completedAt
-                UserDefaults.standard.set(completedAt.timeIntervalSince1970,
-                                          forKey: Self.lastSuccessfulSyncKey)
-                clearIncompleteSync()
-                dlog("sync", "OK — serial=\(report.serial) inserted=\(report.inserted) events=\(report.eventsSynced) cursor=\(report.nextCursor)")
-                status = "synced — \(report.inserted) new events from \(report.serial)"
-                return report
-            } catch {
-                // the Rust layer packs the diagnostic detail (auth state, missing
-                // summary, cursor) into this message — log it verbatim.
-                dlog("sync", "attempt \(attempt) FAILED: \(error)")
-                pump?.cancel()
-                pump = nil
-                t.disconnect() // release the (possibly half-dead) link before retrying
-                if Self.isAuthenticationFailure(error) {
-                    status = "auth failed — this key was rejected by the ring; paste the key exported from the phone that onboarded this exact ring"
-                    dlog("sync", "not retrying: auth rejection is deterministic")
-                    // Deterministic rejection — an eager resume would just re-fail.
-                    clearIncompleteSync()
-                    return nil
-                }
-                status = "sync interrupted: \(error)"
+        case .failed(let exit, let detail):
+            switch (trigger, exit) {
+            case (_, .authRejected): break // status already set
+            case (_, .heldByOtherApp), (_, .connectFailed) where otherAppHoldsRing:
+                status = "another app on this phone holds the ring — remove the official Oura app or turn off its Bluetooth permission"
+            case (_, .bluetoothOff):
+                status = "Bluetooth is off or not allowed for Open Oura"
+            case (.foreground, _), (.bgRefresh, _), (.bgProcessing, _), (.bleRestore, _):
+                status = "sync couldn't reach the ring — tap the sync icon for details"
+            default:
+                status = "sync failed after \(attempts) attempt(s) — progress is saved, run sync again to resume (\(detail))"
             }
         }
-        switch source {
-        case "automatic":
-            status = "automatic sync couldn't reach the ring — tap the sync icon for details"
-        case "resume":
-            status = "couldn't resume the interrupted sync — it will retry when you return to the app"
-        default:
-            status = "sync failed after \(maxAttempts) attempts — progress is saved, run sync again to resume (\(status))"
+    }
+
+    func end(outcome: SyncOutcome) {
+        busy = false
+        trigger = nil
+        if let report = outcome.report {
+            lastReport = report
+            lastSuccessfulSyncAt = Date()
         }
-        dlog("sync", "giving up after \(maxAttempts) attempts — cursor is checkpointed, next sync resumes")
-        return nil
     }
 
     /// Render Rust-side progress into the status line.
-    private func showProgress(stage: String, bytesLeft: UInt64, events: UInt32) {
+    func showProgress(stage: String, bytesLeft: UInt64, events: UInt32) {
         dlog("progress", "stage=\(stage) bytesLeft=\(bytesLeft) events=\(events)")
-        // Real drain progress means data is mid-transfer: from here until the sync
-        // completes, an interruption should resume eagerly on return to the app.
-        if events > 0, !markedIncompleteThisRun {
-            markedIncompleteThisRun = true
-            UserDefaults.standard.set(true, forKey: Self.syncIncompleteKey)
-        }
         switch stage {
         case "auth":
             status = "authenticating…"
@@ -544,10 +483,5 @@ final class RingSync: ObservableObject {
         let minutes = Int((Double(s) / 60).rounded())
         if minutes < 60 { return "\(minutes) min" }
         return String(format: "%.1f h", Double(minutes) / 60)
-    }
-
-    private static func isAuthenticationFailure(_ error: Error) -> Bool {
-        let s = String(describing: error).lowercased()
-        return s.contains("authentication failed") || s.contains("ring rejected auth")
     }
 }

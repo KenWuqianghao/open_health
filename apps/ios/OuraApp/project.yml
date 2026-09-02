@@ -23,13 +23,16 @@ schemes:
         OuraApp: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets: [OuraAppTests]
     archive:
       config: Release
 
 settings:
   base:
     MARKETING_VERSION: "0.1.1"
-    CURRENT_PROJECT_VERSION: "22"
+    CURRENT_PROJECT_VERSION: "23"
     PRODUCT_BUNDLE_IDENTIFIER: md.thomas.openoura
     TARGETED_DEVICE_FAMILY: "1"   # iPhone only (no iPad multitasking orientation reqs)
     CODE_SIGN_STYLE: Automatic
@@ -44,6 +47,18 @@ settings:
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
 
 targets:
+  OuraAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: OuraApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OuraApp.app/OuraApp"
+        BUNDLE_LOADER: "$(TEST_HOST)"
   OuraApp:
     type: application
     platform: iOS
@@ -76,7 +91,15 @@ targets:
       - path: Reports.swift
       - path: Theme.swift
       - path: BLETransport.swift
+      - path: RingCentral.swift
       - path: RingSync.swift
+      - path: SyncCoordinator.swift
+      - path: BackgroundSync.swift
+      - path: AppDelegate.swift
+      - path: AppHooks.swift
+      - path: PairedRing.swift
+      - path: RingPairing.swift
+      - path: Pairing.swift
       - path: ProfileSettings.swift
       - path: EventStore.swift
       - path: ModelCache.swift
@@ -90,7 +113,11 @@ targets:
       - path: CrashCatch.c
       - path: CrashCatch.h
       - path: Diagnostics.swift
-      - path: HealthExport.swift
+      - path: HealthModels.swift
+      - path: HealthPlanner.swift
+      - path: HealthExportState.swift
+      - path: HealthStoreClient.swift
+      - path: HealthExporter.swift
       - path: ../generated/oura_core.swift
       - path: Assets.xcassets
       # bundled models + data (gitignored local files). oura.db is temporary until the
@@ -109,6 +136,7 @@ targets:
         buildPhase: resources
     dependencies:
       - sdk: HealthKit.framework
+      - sdk: BackgroundTasks.framework
       # Rust core (static lib in an xcframework) — link, don't embed
       - framework: ../OuraCore.xcframework
         embed: false

@@ -539,7 +539,7 @@ pub fn health_samples_from_store(
 
     let days_json: Vec<Value> = out_days
         .into_iter()
-        .filter(|(updated, _)| since_unix.map_or(true, |s| *updated > s))
+        .filter(|(updated, _)| since_unix.is_none_or(|s| *updated > s))
         .map(|(_, v)| v)
         .collect();
 

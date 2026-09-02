@@ -909,7 +909,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
                     .filter(|bpm| (30.0..=240.0).contains(bpm))
                 {
                     let at = unix_s_at(*ds, *cu);
-                    if latest_hr.map_or(true, |(current, _)| at > current) {
+                    if latest_hr.is_none_or(|(current, _)| at > current) {
                         latest_hr = Some((at, bpm));
                     }
                 }

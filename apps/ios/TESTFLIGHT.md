@@ -45,3 +45,20 @@ xcodebuild -exportArchive -archivePath build/OuraApp.xcarchive \
 - **Data**: the local `project.yml` build bundles `oura.db` when that gitignored file is
   present, which is useful for a personal TestFlight. The Xcode Cloud `project-ci.yml`
   build does not bundle `oura.db`, `.ptl` models, or LibTorch.
+
+## Background modes (App Review note)
+
+The app declares `bluetooth-central`, `fetch`, and `processing`:
+
+- `bluetooth-central`: the app syncs health data from the user's Oura ring over
+  Bluetooth. The mode keeps a sync alive when the phone locks and lets iOS reconnect
+  the ring and relaunch the app when the ring comes into range.
+- `fetch` / `processing`: scheduled runs of the same sync plus the on-device analysis.
+
+No data leaves the device. See `docs/ios-background-sync.md`.
+
+## The official Oura app
+
+The ring holds one Bluetooth link. Testers must remove the official Oura app from the
+same phone, or turn off its Bluetooth permission, and factory-reset the ring before
+they pair it with this app.

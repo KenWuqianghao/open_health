@@ -73,9 +73,19 @@ a nap doesn't shadow the real sleep.
 - **Home layout**: same day-unit model on both, but iOS uses thomas.md Quiet Ink (warm paper,
   hairlines, serif titles) while the web still uses its own teal/card theme. Match *data/features*,
   not pixel-for-pixel layout. iOS opens details as sheets; the web as stacked `<dialog>`s.
-- **BLE sync**: iOS syncs **natively** — `RingSync.swift` (CoreBluetooth `BLETransport`)
-  drives the Rust `RingSession` FFI (`oura-core`) to authenticate + drain into a writable
-  DB. The web dashboard has **no** BLE; it reads a DB produced by the desktop `oura sync`.
+- **Pairing**: iOS pairs the ring **on the phone** (`RingPairing.swift` → the Rust
+  `RingSession.pair` FFI → `oura_link::pair`). The app makes the 16-byte key with the
+  platform CSPRNG, saves it in the Keychain (readable after the first unlock), then
+  installs it on a factory-reset ring, sets the clock, and turns on daytime HR + SpO2.
+  "Show auth key" in Settings hands the same key to the desktop client (`--key-file`).
+  The desktop CLI runs the same `pair` flow.
+- **Background sync**: iOS only. One `CBCentralManager` with a restore identifier
+  (`RingCentral.swift`), a `SyncCoordinator` with a budget per trigger, and two
+  `BGTaskScheduler` tasks (`BackgroundSync.swift`). See `docs/ios-background-sync.md`.
+- **BLE sync**: iOS syncs **natively** — `SyncCoordinator.swift` (CoreBluetooth
+  `RingCentral` + per-link `BLETransport`) drives the Rust `RingSession` FFI
+  (`oura-core`) to authenticate + drain into a writable DB. The web dashboard has **no**
+  BLE; it reads a DB produced by the desktop `oura sync`.
   Both ultimately run the SAME `oura-link` `OuraClient<T: Transport>` over a different
   transport (btleplug on desktop, CoreBluetooth-over-FFI on iOS). Ring 5 history payloads
   are coalesced into 32 KB chunks before crossing UniFFI; control/summary frames stay
@@ -116,10 +126,17 @@ which is why Oura's own app has no per-night HRV trend either.
 ## Known gaps (web-only, not yet on iOS)
 
 - **Advanced & debugging**: on-ring feature toggles (`/api/feature`) and the per-type
-  event stream. Profile editing is now native on iOS, including optional Apple Health
-  import for date of birth, biological sex, height, and weight, plus optional export
-  of workouts (add/remove as detections change), sleep stages, heart rate, HRV,
-  resting HR, steps, calories, and distance.
+  event stream. Profile editing is native on iOS, including optional Apple Health
+  import for date of birth, biological sex, height, and weight.
+- **Apple Health export** is iOS-only by nature: the web dashboard has no health store.
+  The samples come from the shared brain `oura-summary::health_export`
+  (`healthSamplesJson` over FFI), so the web could render the same day bundles as an
+  "export preview" later. The exporter (`HealthExporter.swift`) writes only measured
+  data: in-bed time and sleep stages (torch build), 1-minute heart rate, HRV (SDNN, only
+  when measured), resting HR, breathing rate, blood oxygen, steps, active energy,
+  resting energy (off by default: a Schofield estimate that double counts with a
+  Watch), and workouts (torch build). Steps are a MET estimate. Never written: scores,
+  skin temperature, distance.
 - **Polysomnograph crosshair**: web has a hover crosshair; iOS uses a touch scrubber
   (drag across the lanes) — same idea, adapted to the input.
 - **DNA explorer** (`/dna`): reads genome `*.vcf.gz` files and scores single-SNP **traits**

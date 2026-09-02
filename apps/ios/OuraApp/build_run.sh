@@ -26,8 +26,12 @@ xcrun -sdk iphonesimulator swiftc \
     -I "$GEN/headers" \
     "$GEN/oura_core.swift" "$APPDIR/Theme.swift" "$APPDIR/OuraApp.swift" \
     "$APPDIR/Models.swift" "$APPDIR/Core.swift" "$APPDIR/Components.swift" "$APPDIR/Reports.swift" \
-    "$APPDIR/BLETransport.swift" "$APPDIR/RingSync.swift" "$APPDIR/ProfileSettings.swift" \
-    "$APPDIR/ModelProgress.swift" "$APPDIR/Diagnostics.swift" "$APPDIR/HealthExport.swift" "$BUILD/CrashCatch.o" \
+    "$APPDIR/BLETransport.swift" "$APPDIR/RingCentral.swift" "$APPDIR/RingSync.swift" \
+    "$APPDIR/SyncCoordinator.swift" "$APPDIR/BackgroundSync.swift" "$APPDIR/AppDelegate.swift" "$APPDIR/AppHooks.swift" \
+    "$APPDIR/PairedRing.swift" "$APPDIR/RingPairing.swift" "$APPDIR/Pairing.swift" "$APPDIR/ProfileSettings.swift" \
+    "$APPDIR/ModelProgress.swift" "$APPDIR/Diagnostics.swift" \
+    "$APPDIR/HealthModels.swift" "$APPDIR/HealthPlanner.swift" "$APPDIR/HealthExportState.swift" \
+    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" "$BUILD/CrashCatch.o" \
     -L "$XCF" -loura_core \
     -o "$APP/OuraApp"
 # Xcode expands $(PRODUCT_BUNDLE_IDENTIFIER) at build time; the raw-swiftc path doesn't,

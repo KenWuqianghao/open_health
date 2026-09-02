@@ -64,8 +64,9 @@ running fully on-device on a real ring's data, sharing the Rust core so a web
 change in `build_summary()` flows to iOS with no re-implementation.
 
 ## Non-goals (v1)
-Cloud sync · accounts · Android · live realtime (`viz`/
-`game`) — all later. v1 is the offline dashboard, done beautifully.
+Cloud sync · accounts · Android · live realtime (`viz`/`game`) · trends screens ·
+widgets · Live Activities — all later. v1 is the offline dashboard, done beautifully,
+plus the OpenStrap-style essentials: on-device pairing, background sync, Apple Health.
 
 ## Status (foundation built & verified on the iOS 26.4 simulator)
 - ✅ **`oura-core` UniFFI `.xcframework`** — `crates/oura-core` exposes `summary_json`/
@@ -82,3 +83,17 @@ Cloud sync · accounts · Android · live realtime (`viz`/
 
 Build: `tools/export_mobile.py` (models) · `apps/ios/OuraApp/build_run.sh` (app on sim) ·
 `apps/ios/spike/build_libtorch_ios.sh` (on-device torch runtime).
+
+## Status (OpenStrap parity, 2026-09)
+- ✅ **On-device pairing** — `PairingView` / `RingPairing`: scan (a reset ring has no
+  name), probe who owns the ring, make + Keychain the key, install it, enable daytime
+  HR + SpO2, first sync over the same link. No more pasted keys.
+- ✅ **One BLE central** — `RingCentral` with a restore identifier; per-link
+  `BLETransport`; `SyncCoordinator` with a budget per trigger.
+- ✅ **Background sync** — `BGAppRefreshTask` + `BGProcessingTask` (`BackgroundSync`)
+  + CoreBluetooth state restoration + the "keep the ring connected" link policy.
+- ✅ **Apple Health export** — `HealthExporter` over the shared `healthSamplesJson`
+  brain: idempotent per-day delete-then-write, finalization cursor, per-day backoff,
+  locked-phone deferral, workouts via `HKWorkoutBuilder`.
+- ⏳ Needs a physical ring + iPhone to validate end to end (see
+  `docs/ios-background-sync.md`, "How to test").

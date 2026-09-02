@@ -97,8 +97,34 @@ struct ProfileSettingsView: View {
     @State private var profile: EditableProfile
     @State private var importing = false
     @State private var message: String?
-    @ObservedObject private var health = HealthExport.shared
+    @ObservedObject private var health = HealthExporter.shared
+    @ObservedObject private var ring = RingSync.shared
+    @State private var showPairing = false
+    @State private var revealKey = false
+    @State private var confirmForget = false
+    @State private var confirmRemove = false
+    @State private var removeMessage: String?
     let onSaved: () -> Void
+    private static let when: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; return f
+    }()
+
+    private var healthStatusLine: String {
+        var parts: [String] = []
+        if let t = health.status.lastSuccessAt { parts.append("last export \(Self.when.string(from: t))") }
+        parts.append(health.status.lastCounts)
+        if health.status.pendingDays > 0 { parts.append("\(health.status.pendingDays) day(s) pending") }
+        if health.status.deferredForUnlock { parts.append("waiting for unlock") }
+        if let e = health.status.lastError { parts.append("error: \(e)") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func forgetRing() {
+        Keychain.deleteKey()
+        PairedRingStore.clear()
+        RingCentral.shared.disarm()
+        dlog("pair", "ring forgotten")
+    }
 
     init(profile: Profile?, onSaved: @escaping () -> Void) {
         _profile = State(initialValue: EditableProfile(profile))
@@ -155,27 +181,74 @@ struct ProfileSettingsView: View {
                 }
 
                 Section {
+                    if let paired = PairedRingStore.load() {
+                        LabeledContent("Serial", value: paired.serial)
+                        LabeledContent("Model", value: paired.hardwareId ?? "—")
+                        LabeledContent("Firmware", value: paired.firmware ?? "—")
+                        LabeledContent("Last sync", value: ring.lastSuccessfulSyncAt.map { Self.when.string(from: $0) } ?? "—")
+                        Button("Pair a different ring") { showPairing = true }
+                        Button {
+                            revealKey.toggle()
+                        } label: {
+                            Label(revealKey ? "Hide auth key" : "Show auth key", systemImage: "key")
+                        }
+                        if revealKey, let key = Keychain.loadKey() {
+                            Text(key).font(Obs.mono(12)).textSelection(.enabled)
+                            Button("Copy key") { UIPasteboard.general.string = key }
+                        }
+                        Button("Forget ring", role: .destructive) { confirmForget = true }
+                            .confirmationDialog("Forget this ring?", isPresented: $confirmForget) {
+                                Button("Forget ring", role: .destructive) { forgetRing() }
+                            } message: {
+                                Text("The key is deleted from this iPhone. Pairing again needs a factory reset of the ring. Synced data and Apple Health samples are kept.")
+                            }
+                    } else {
+                        Button("Pair a ring") { showPairing = true }
+                    }
+                } header: {
+                    Text("Ring")
+                } footer: {
+                    Text("The auth key was made on this iPhone at pairing time. Copy it to use the same ring with the desktop client (oura --key-file). Losing it means a factory reset.")
+                }
+
+                Section {
                     Toggle("Write ring data to Apple Health", isOn: Binding(
                         get: { health.enabled },
-                        set: { health.setEnabled($0, summary: SummaryCache.load()) }
+                        set: { on in Task { await health.setEnabled(on) } }
                     ))
-                    if !health.status.isEmpty {
-                        Text(health.status).font(.footnote).foregroundStyle(Obs.ink2)
-                    }
                     if health.enabled {
-                        Button("Remove Open Oura samples from Health") {
-                            health.removeExportedSamples()
+                        Toggle("Include resting energy (estimate)", isOn: $health.includeBasal)
+                        DisclosureGroup("What is exported") {
+                            Text("Sleep: in-bed time, and sleep stages when the on-device models are available.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts when the on-device models detect them.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
+                                .font(.footnote).foregroundStyle(Obs.ink2)
                         }
-                        .foregroundStyle(Obs.bad)
+                        HStack {
+                            Text(health.status.running ? (health.status.progress.isEmpty ? "exporting…" : health.status.progress) : "Export now")
+                            Spacer()
+                            if health.status.running { ProgressView() }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { if !health.status.running { health.schedule(.manual(full: false)) } }
+                        Button("Export everything again") { health.schedule(.manual(full: true)) }
+                            .disabled(health.status.running)
+                        Text(healthStatusLine).font(.footnote).foregroundStyle(health.status.lastError == nil ? Obs.ink2 : Obs.bad)
+                        Button("Remove Open Oura data from Health", role: .destructive) { confirmRemove = true }
+                            .confirmationDialog("Remove all Open Oura samples from Apple Health?", isPresented: $confirmRemove) {
+                                Button("Remove", role: .destructive) {
+                                    Task { removeMessage = await health.removeAllExportedData() }
+                                }
+                            }
+                        if let removeMessage { Text(removeMessage).font(.footnote).foregroundStyle(Obs.ink2) }
                     }
                 } header: {
                     Text("Apple Health")
                 } footer: {
-                    Text("Exports workouts (and removes ones the ring no longer detects), sleep stages, heart rate, HRV, resting HR, steps, active calories, and distance. Data stays on this iPhone.")
+                    Text("Only measured data is written, never scores. Every day is rewritten in place, so re-running never duplicates. Data stays on this iPhone.")
                 }
             }
             .scrollContentBackground(.hidden)
             .background(Obs.canvas.ignoresSafeArea())
+            .fullScreenCover(isPresented: $showPairing) { PairingView(onPaired: { _ in }) }
             .navigationTitle("profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

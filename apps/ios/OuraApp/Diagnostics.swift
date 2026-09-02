@@ -93,6 +93,19 @@ final class DiagStore: NSObject, ObservableObject, @unchecked Sendable {
         dlog("diag", "session started — previous crashes \(incidents.count), older sessions \(sessions.count)")
     }
 
+    /// Tag how this process started so a background relaunch that iOS later
+    /// suspends and kills is not filed under "previous crashes".
+    func noteLaunch(state: UIApplication.State, bluetoothCentrals: [String]) {
+        let how: String
+        switch state {
+        case .background: how = bluetoothCentrals.isEmpty ? "background launch" : "background launch by Bluetooth restore"
+        case .inactive: how = "foreground launch (inactive)"
+        case .active: how = "foreground launch"
+        @unknown default: how = "launch"
+        }
+        dlog("launch", "\(how)\(bluetoothCentrals.isEmpty ? "" : " centrals=\(bluetoothCentrals)")")
+    }
+
     func append(_ line: String) {
         queue.async { [weak self] in
             guard let self, let file = self.file else { return }

@@ -112,47 +112,81 @@ struct AllDaysView: View {
     }
 }
 
-// Pair + sync from a real ring: paste the auth key (exported on the desktop), connect
-// over BLE, drain history into the writable DB. BLE only works on a physical device.
+// Sync status + controls + diagnostics. Pairing lives in `PairingView`; the key is
+// in the Keychain. BLE only works on a physical device.
 struct SyncView: View {
     @ObservedObject var ring: RingSync
     let onSynced: (SyncReport) -> Void
     let onReset: () -> Void
+    let onPair: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var key = Keychain.loadKey() ?? ""
     @ObservedObject private var diag = RingDiag.shared
     @ObservedObject private var store = DiagStore.shared
     @State private var copied = false
+    @State private var linkPolicy = SyncSettings.linkPolicy
+    private static let when: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MM-dd HH:mm"; return f
+    }()
     var body: some View {
         NavigationStack {
             ZStack {
                 Obs.canvas.ignoresSafeArea()
+                ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Pair your ring").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-                    // the ring advertises reliably only ON its charger, and its single
-                    // BLE link is usually held by any phone running the official app.
-                    Text("Put the ring on its charger next to this iPhone, turn off Bluetooth on any phone with the official Oura app, then paste the auth key you exported on your computer. The first sync pulls the ring's full history and can take a while — keep the app open; if the connection drops it reconnects and resumes automatically.")
-                        .font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
-                    TextField("32-hex auth key", text: $key)
-                        .font(Obs.mono(13)).foregroundStyle(Obs.ink)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .padding(12)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Obs.trace, lineWidth: 0.8))
-                    Button {
-                        Task {
-                            if let report = await ring.run(keyHex: key) { onSynced(report) }
+                    Text("Sync").font(Obs.serif(24)).foregroundStyle(Obs.ink)
+                    if ring.isPaired {
+                        Text("The ring syncs when you open the app, in the background when iOS allows it, and when the ring reconnects. Put the ring on its charger next to this iPhone for the most reliable background sync.")
+                            .font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            Task { if let report = await ring.run() { onSynced(report) } }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if ring.busy { ProgressView().tint(Obs.paper) }
+                                Text(ring.busy ? "syncing…" : "Sync now").font(Obs.mono(13, .medium))
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Obs.ink).foregroundStyle(Obs.paper)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if ring.busy { ProgressView().tint(Obs.paper) }
-                            Text(ring.busy ? "syncing…" : "Connect & Sync").font(Obs.mono(13, .medium))
+                        .disabled(ring.busy)
+                        if ring.busy {
+                            Button("Stop") { ring.cancel() }
+                                .font(Obs.mono(12, .medium)).foregroundStyle(Obs.ink2)
                         }
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(Obs.ink).foregroundStyle(Obs.paper)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        Text("No ring is paired yet. Factory-reset your ring, put it on its charger next to this iPhone, then pair it here.")
+                            .font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+                        Button(action: onPair) {
+                            Text("Pair a ring").font(Obs.mono(13, .medium))
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Obs.ink).foregroundStyle(Obs.paper)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
                     }
-                    .disabled(ring.busy)
+                    if !ring.status.isEmpty {
+                        Text(ring.status).font(Obs.mono(12))
+                            .foregroundStyle(ring.lastReport != nil ? Obs.good : Obs.ink2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if ring.backgroundRefreshDenied {
+                        Text("Background App Refresh is off for Open Oura. Turn it on in Settings so the ring can sync while the app is closed.")
+                            .font(Obs.mono(11)).foregroundStyle(Obs.bad).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if ring.otherAppHoldsRing {
+                        Text("Another app on this phone holds the ring's Bluetooth link. Remove the official Oura app or turn off its Bluetooth permission.")
+                            .font(Obs.mono(11)).foregroundStyle(Obs.bad).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Picker("After a sync", selection: $linkPolicy) {
+                        ForEach(LinkPolicy.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .font(Obs.mono(12))
+                    .onChange(of: linkPolicy) { _, v in SyncSettings.linkPolicy = v }
+                    Text(linkPolicy == .park
+                         ? "Keeping the link lets iOS wake the app when the ring has new data. Release it if you also sync this ring from a computer."
+                         : "The ring is free for the desktop client after each sync. Background wakes need the ring to reconnect.")
+                        .font(Obs.mono(10)).foregroundStyle(Obs.muted).fixedSize(horizontal: false, vertical: true)
                     Button(role: .destructive) {
                         ring.resetLocalDatabase()
                         onReset()
@@ -165,11 +199,23 @@ struct SyncView: View {
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Obs.trace, lineWidth: 0.8))
                     }
                     .disabled(ring.busy)
-                    if !ring.status.isEmpty {
-                        Text(ring.status).font(Obs.mono(12))
-                            .foregroundStyle(ring.lastReport != nil ? Obs.good : Obs.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
+
+                    if !ring.history.isEmpty {
+                        Text("recent syncs").font(Obs.mono(11)).foregroundStyle(Obs.ink2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(ring.history.suffix(8).reversed()) { m in
+                                HStack(spacing: 8) {
+                                    Text(Self.when.string(from: m.startedAt)).font(Obs.mono(10)).foregroundStyle(Obs.ink2)
+                                    Text(m.trigger.rawValue).font(Obs.mono(10, .medium)).foregroundStyle(Obs.ink)
+                                    Text(m.exit.rawValue).font(Obs.mono(10))
+                                        .foregroundStyle(m.exit == .completed ? Obs.good : Obs.bad)
+                                    Spacer()
+                                    Text("+\(m.inserted)").font(Obs.mono(10)).foregroundStyle(Obs.ink2)
+                                }
+                            }
+                        }
                     }
+
                     // live transcript + leftover logs from previous crashes / kills.
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -238,36 +284,19 @@ struct SyncView: View {
                     Spacer()
                 }
                 .padding(24)
+                }
             }
             .navigationTitle("sync").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
-                        .disabled(ring.busy)
                 }
             }
         }
-        // The sync belongs to RingSync, not to this presentation. Let the panel be
-        // tucked away while BLE keeps running; the top-bar indicator remains live
-        // and can reopen these diagnostics at any time.
         .presentationDragIndicator(.visible)
-        .onAppear {
-            if ring.busy { IdleTimerLock.acquire("pair-screen") }
-        }
-        .onDisappear {
-            IdleTimerLock.release("pair-screen")
-        }
-        .onChange(of: ring.busy) { _, busy in
-            if busy {
-                IdleTimerLock.acquire("pair-screen")
-            } else {
-                IdleTimerLock.release("pair-screen")
-            }
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, ring.busy {
                 IdleTimerLock.refreshIfHeld("ring-sync")
-                IdleTimerLock.refreshIfHeld("pair-screen")
             }
         }
     }
@@ -321,12 +350,13 @@ struct RootView: View {
     @State private var report: ReportSel?
     @State private var showAllDays = false
     @State private var showSync = false
+    @State private var showPairing = !RingSync.shared.isPaired && Keychain.loadKey() == nil
     @State private var showProfile = false
     @State private var showSleepDebt = false
     @State private var vital: VitalKind?
     @State private var loadGeneration = 0
     @State private var isRefreshingSummary = false
-    @StateObject private var ring = RingSync()
+    @ObservedObject private var ring = RingSync.shared
     @StateObject private var modelProgress = ModelProgress()
     private func f(_ v: Double?, _ fallback: String = "—") -> String {
         v.map { "\(Int($0))" } ?? fallback
@@ -367,7 +397,11 @@ struct RootView: View {
         .fullScreenCover(item: $report) { sel in if let s { DayReportView(s: s, day: sel.day, tab: sel.sleep ? .sleep : .activity) } }
         .sheet(isPresented: $showAllDays) { if let s { AllDaysView(s: s) } }
         .sheet(isPresented: $showSync) {
-            SyncView(ring: ring, onSynced: refreshAfterSync, onReset: resetAndReload)
+            SyncView(ring: ring, onSynced: refreshAfterSync, onReset: resetAndReload,
+                     onPair: { showSync = false; showPairing = true })
+        }
+        .fullScreenCover(isPresented: $showPairing) {
+            PairingView(onPaired: { refreshAfterSync($0) })
         }
         .sheet(isPresented: $showProfile) { ProfileSettingsView(profile: s?.profile, onSaved: refreshDerivedData) }
         .sheet(isPresented: $showSleepDebt) { if let debt = s?.sleepDebt { SleepDebtDetail(debt: debt) } }
@@ -382,7 +416,13 @@ struct RootView: View {
             if phase == .active {
                 IdleTimerLock.refreshIfHeld("models")
                 requestAutomaticSync()
+                HealthExporter.shared.schedule(.foreground)
             }
+        }
+        // A sync that completed elsewhere (background, restore wake) refreshes the
+        // screen when its report lands.
+        .onChange(of: ring.lastReport?.nextCursor) { _, _ in
+            if let report = ring.lastReport { refreshAfterSync(report) }
         }
     }
 
@@ -415,11 +455,7 @@ struct RootView: View {
     }
 
     private func requestAutomaticSync() {
-        Task {
-            if let report = await ring.syncAutomaticallyIfNeeded() {
-                refreshAfterSync(report)
-            }
-        }
+        Task { _ = await ring.syncAutomaticallyIfNeeded() }
     }
 
     // The heavy on-device models run off the main thread (load): show the fast
@@ -451,7 +487,7 @@ struct RootView: View {
                     guard generation == loadGeneration else { return }
                     s = base
                     SummaryCache.save(base)
-                    HealthExport.shared.push(base)
+                    HealthExporter.shared.schedule(.sync, summary: base)
                 }
             }
             #if TORCH
@@ -472,7 +508,7 @@ struct RootView: View {
             if let summary {
                 s = summary
                 SummaryCache.save(summary)
-                HealthExport.shared.push(summary)
+                HealthExporter.shared.schedule(.modelsUpdated, summary: summary)
             }
             isRefreshingSummary = false
             modelProgress.report(generation, nil)
@@ -629,6 +665,13 @@ struct RootView: View {
 
 @main
 struct OuraApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     init() { DiagStore.shared.bootstrap() }
-    var body: some Scene { WindowGroup { RootView() } }
+    var body: some Scene {
+        WindowGroup { RootView() }
+            .onChange(of: scenePhase) { _, phase in
+                Task { await SyncCoordinator.shared.scenePhaseChanged(phase) }
+            }
+    }
 }

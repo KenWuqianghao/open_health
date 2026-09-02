@@ -39,10 +39,14 @@ xcrun -sdk iphonesimulator swiftc \
     -I "$GEN/headers" \
     "$GEN/oura_core.swift" "$APPDIR/Theme.swift" "$APPDIR/OuraApp.swift" \
     "$APPDIR/Models.swift" "$APPDIR/Core.swift" "$APPDIR/Components.swift" "$APPDIR/Reports.swift" \
-    "$APPDIR/BLETransport.swift" "$APPDIR/RingSync.swift" "$APPDIR/ProfileSettings.swift" \
+    "$APPDIR/BLETransport.swift" "$APPDIR/RingCentral.swift" "$APPDIR/RingSync.swift" \
+    "$APPDIR/SyncCoordinator.swift" "$APPDIR/BackgroundSync.swift" "$APPDIR/AppDelegate.swift" "$APPDIR/AppHooks.swift" \
+    "$APPDIR/PairedRing.swift" "$APPDIR/RingPairing.swift" "$APPDIR/Pairing.swift" "$APPDIR/ProfileSettings.swift" \
     "$APPDIR/EventStore.swift" "$APPDIR/ModelCache.swift" "$APPDIR/ModelProgress.swift" \
     "$APPDIR/SleepStaging.swift" "$APPDIR/CvaModel.swift" "$APPDIR/ActivityModel.swift" "$APPDIR/IllnessModel.swift" \
-    "$APPDIR/Diagnostics.swift" "$APPDIR/HealthExport.swift" "$BUILD/TorchBridge.o" "$BUILD/CrashCatch.o" \
+    "$APPDIR/Diagnostics.swift" \
+    "$APPDIR/HealthModels.swift" "$APPDIR/HealthPlanner.swift" "$APPDIR/HealthExportState.swift" \
+    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" "$BUILD/TorchBridge.o" "$BUILD/CrashCatch.o" \
     -L "$XCF" -loura_core \
     -lc++ -lsqlite3 \
     -L "$LT/lib" -ltorch -ltorch_cpu -lc10 \

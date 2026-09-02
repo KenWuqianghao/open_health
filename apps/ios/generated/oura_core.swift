@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
     typealias FfiType = UInt16
     typealias SwiftType = UInt16
@@ -479,6 +495,30 @@ fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterBool : FfiConverter {
+    typealias FfiType = Int8
+    typealias SwiftType = Bool
+
+    public static func lift(_ value: Int8) throws -> Bool {
+        return value != 0
+    }
+
+    public static func lower(_ value: Bool) -> Int8 {
+        return value ? 1 : 0
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Bool, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterString: FfiConverter {
     typealias SwiftType = String
     typealias FfiType = RustBuffer
@@ -540,9 +580,34 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 /**
  * A live sync session bound to a connected ring: Swift creates it with a writer,
- * feeds inbound BLE frames via `push_frame`, then awaits `sync`.
+ * feeds inbound BLE frames via `push_frame`, then awaits `sync`/`pair`/`probe`.
  */
 public protocol RingSessionProtocol : AnyObject {
+    
+    /**
+     * Cancel the operation in flight (`sync`, `sync_with`, `pair`). Idempotent;
+     * a no-op when nothing runs. Safe mid-drain: every batch is inserted and
+     * checkpointed before the next request, so the next call resumes.
+     */
+    func cancel() 
+    
+    /**
+     * Install `key_hex` on a factory-reset ring (or confirm it on a ring that
+     * already holds it), set the clock, read the battery, turn on the features in
+     * `plan`, and record the device in the DB at `db_path`. When a key was
+     * installed the sync cursor is reset (the ring clock restarted).
+     *
+     * Swift MUST save `key_hex` to the Keychain BEFORE calling this: a crash
+     * mid-install must never lose the only copy of a key that is live on the ring.
+     * `progress` receives the pairing stages as `stage` tags.
+     */
+    func pair(dbPath: String, keyHex: String, plan: FeaturePlanFfi, progress: SyncProgressListener) async throws  -> PairReport
+    
+    /**
+     * Identify the ring and classify who owns it, without changing anything.
+     * `key_hex` is the stored key to test (or `None` for an all-zero probe key).
+     */
+    func probe(keyHex: String?) async throws  -> ProbeReport
     
     /**
      * Swift pushes each inbound BLE notification frame here.
@@ -550,20 +615,26 @@ public protocol RingSessionProtocol : AnyObject {
     func pushFrame(data: Data) 
     
     /**
+     * [`Self::sync_with`] with the default options.
+     */
+    func sync(dbPath: String, keyHex: String, progress: SyncProgressListener) async throws  -> SyncReport
+    
+    /**
      * Authenticate, set up the app stream, and drain history events into the DB at
      * `db_path`. `key_hex` is the 32-char ring auth key. `progress` receives stage
      * changes and per-batch drain progress. Returns the sync counts.
      *
-     * The drain checkpoints its cursor after every batch, so a failed call can be
-     * retried (reconnect + call again) and resumes where it left off.
+     * The drain checkpoints its cursor after every batch, so a failed or
+     * cancelled call can be retried (reconnect + call again) and resumes where
+     * it left off.
      */
-    func sync(dbPath: String, keyHex: String, progress: SyncProgressListener) async throws  -> SyncReport
+    func syncWith(dbPath: String, keyHex: String, options: SyncOptions, progress: SyncProgressListener) async throws  -> SyncReport
     
 }
 
 /**
  * A live sync session bound to a connected ring: Swift creates it with a writer,
- * feeds inbound BLE frames via `push_frame`, then awaits `sync`.
+ * feeds inbound BLE frames via `push_frame`, then awaits `sync`/`pair`/`probe`.
  */
 open class RingSession:
     RingSessionProtocol {
@@ -624,6 +695,65 @@ public convenience init(writer: BleWriter) {
 
     
     /**
+     * Cancel the operation in flight (`sync`, `sync_with`, `pair`). Idempotent;
+     * a no-op when nothing runs. Safe mid-drain: every batch is inserted and
+     * checkpointed before the next request, so the next call resumes.
+     */
+open func cancel() {try! rustCall() {
+    uniffi_oura_core_fn_method_ringsession_cancel(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+    /**
+     * Install `key_hex` on a factory-reset ring (or confirm it on a ring that
+     * already holds it), set the clock, read the battery, turn on the features in
+     * `plan`, and record the device in the DB at `db_path`. When a key was
+     * installed the sync cursor is reset (the ring clock restarted).
+     *
+     * Swift MUST save `key_hex` to the Keychain BEFORE calling this: a crash
+     * mid-install must never lose the only copy of a key that is live on the ring.
+     * `progress` receives the pairing stages as `stage` tags.
+     */
+open func pair(dbPath: String, keyHex: String, plan: FeaturePlanFfi, progress: SyncProgressListener)async throws  -> PairReport {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_oura_core_fn_method_ringsession_pair(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(dbPath),FfiConverterString.lower(keyHex),FfiConverterTypeFeaturePlanFfi.lower(plan),FfiConverterCallbackInterfaceSyncProgressListener.lower(progress)
+                )
+            },
+            pollFunc: ffi_oura_core_rust_future_poll_rust_buffer,
+            completeFunc: ffi_oura_core_rust_future_complete_rust_buffer,
+            freeFunc: ffi_oura_core_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypePairReport.lift,
+            errorHandler: FfiConverterTypeSyncError.lift
+        )
+}
+    
+    /**
+     * Identify the ring and classify who owns it, without changing anything.
+     * `key_hex` is the stored key to test (or `None` for an all-zero probe key).
+     */
+open func probe(keyHex: String?)async throws  -> ProbeReport {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_oura_core_fn_method_ringsession_probe(
+                    self.uniffiClonePointer(),
+                    FfiConverterOptionString.lower(keyHex)
+                )
+            },
+            pollFunc: ffi_oura_core_rust_future_poll_rust_buffer,
+            completeFunc: ffi_oura_core_rust_future_complete_rust_buffer,
+            freeFunc: ffi_oura_core_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeProbeReport.lift,
+            errorHandler: FfiConverterTypeSyncError.lift
+        )
+}
+    
+    /**
      * Swift pushes each inbound BLE notification frame here.
      */
 open func pushFrame(data: Data) {try! rustCall() {
@@ -634,12 +764,7 @@ open func pushFrame(data: Data) {try! rustCall() {
 }
     
     /**
-     * Authenticate, set up the app stream, and drain history events into the DB at
-     * `db_path`. `key_hex` is the 32-char ring auth key. `progress` receives stage
-     * changes and per-batch drain progress. Returns the sync counts.
-     *
-     * The drain checkpoints its cursor after every batch, so a failed call can be
-     * retried (reconnect + call again) and resumes where it left off.
+     * [`Self::sync_with`] with the default options.
      */
 open func sync(dbPath: String, keyHex: String, progress: SyncProgressListener)async throws  -> SyncReport {
     return
@@ -648,6 +773,32 @@ open func sync(dbPath: String, keyHex: String, progress: SyncProgressListener)as
                 uniffi_oura_core_fn_method_ringsession_sync(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(dbPath),FfiConverterString.lower(keyHex),FfiConverterCallbackInterfaceSyncProgressListener.lower(progress)
+                )
+            },
+            pollFunc: ffi_oura_core_rust_future_poll_rust_buffer,
+            completeFunc: ffi_oura_core_rust_future_complete_rust_buffer,
+            freeFunc: ffi_oura_core_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeSyncReport.lift,
+            errorHandler: FfiConverterTypeSyncError.lift
+        )
+}
+    
+    /**
+     * Authenticate, set up the app stream, and drain history events into the DB at
+     * `db_path`. `key_hex` is the 32-char ring auth key. `progress` receives stage
+     * changes and per-batch drain progress. Returns the sync counts.
+     *
+     * The drain checkpoints its cursor after every batch, so a failed or
+     * cancelled call can be retried (reconnect + call again) and resumes where
+     * it left off.
+     */
+open func syncWith(dbPath: String, keyHex: String, options: SyncOptions, progress: SyncProgressListener)async throws  -> SyncReport {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_oura_core_fn_method_ringsession_sync_with(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(dbPath),FfiConverterString.lower(keyHex),FfiConverterTypeSyncOptions.lower(options),FfiConverterCallbackInterfaceSyncProgressListener.lower(progress)
                 )
             },
             pollFunc: ffi_oura_core_rust_future_poll_rust_buffer,
@@ -710,6 +861,411 @@ public func FfiConverterTypeRingSession_lift(_ pointer: UnsafeMutableRawPointer)
 #endif
 public func FfiConverterTypeRingSession_lower(_ value: RingSession) -> UnsafeMutableRawPointer {
     return FfiConverterTypeRingSession.lower(value)
+}
+
+
+public struct FeatureOutcomeFfi {
+    public var feature: String
+    public var mode: String
+    /**
+     * `set` | `already_set` | `rejected: …` | `skipped: …`
+     */
+    public var result: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(feature: String, mode: String, 
+        /**
+         * `set` | `already_set` | `rejected: …` | `skipped: …`
+         */result: String) {
+        self.feature = feature
+        self.mode = mode
+        self.result = result
+    }
+}
+
+
+
+extension FeatureOutcomeFfi: Equatable, Hashable {
+    public static func ==(lhs: FeatureOutcomeFfi, rhs: FeatureOutcomeFfi) -> Bool {
+        if lhs.feature != rhs.feature {
+            return false
+        }
+        if lhs.mode != rhs.mode {
+            return false
+        }
+        if lhs.result != rhs.result {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(feature)
+        hasher.combine(mode)
+        hasher.combine(result)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFeatureOutcomeFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FeatureOutcomeFfi {
+        return
+            try FeatureOutcomeFfi(
+                feature: FfiConverterString.read(from: &buf), 
+                mode: FfiConverterString.read(from: &buf), 
+                result: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FeatureOutcomeFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.feature, into: &buf)
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterString.write(value.result, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFeatureOutcomeFfi_lift(_ buf: RustBuffer) throws -> FeatureOutcomeFfi {
+    return try FfiConverterTypeFeatureOutcomeFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFeatureOutcomeFfi_lower(_ value: FeatureOutcomeFfi) -> RustBuffer {
+    return FfiConverterTypeFeatureOutcomeFfi.lower(value)
+}
+
+
+public struct PairReport {
+    public var serial: String
+    public var hardwareId: String?
+    public var generation: UInt8?
+    public var firmware: String?
+    public var batteryPct: UInt8?
+    /**
+     * Always `success` when `pair` returns; kept for the diagnostics log.
+     */
+    public var authResult: String
+    /**
+     * `true` when the ring was factory-reset and the key was installed now.
+     */
+    public var keyInstalled: Bool
+    /**
+     * `true` when the store's sync cursor was reset to zero (a new key means the
+     * ring clock restarted).
+     */
+    public var cursorReset: Bool
+    public var features: [FeatureOutcomeFfi]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serial: String, hardwareId: String?, generation: UInt8?, firmware: String?, batteryPct: UInt8?, 
+        /**
+         * Always `success` when `pair` returns; kept for the diagnostics log.
+         */authResult: String, 
+        /**
+         * `true` when the ring was factory-reset and the key was installed now.
+         */keyInstalled: Bool, 
+        /**
+         * `true` when the store's sync cursor was reset to zero (a new key means the
+         * ring clock restarted).
+         */cursorReset: Bool, features: [FeatureOutcomeFfi]) {
+        self.serial = serial
+        self.hardwareId = hardwareId
+        self.generation = generation
+        self.firmware = firmware
+        self.batteryPct = batteryPct
+        self.authResult = authResult
+        self.keyInstalled = keyInstalled
+        self.cursorReset = cursorReset
+        self.features = features
+    }
+}
+
+
+
+extension PairReport: Equatable, Hashable {
+    public static func ==(lhs: PairReport, rhs: PairReport) -> Bool {
+        if lhs.serial != rhs.serial {
+            return false
+        }
+        if lhs.hardwareId != rhs.hardwareId {
+            return false
+        }
+        if lhs.generation != rhs.generation {
+            return false
+        }
+        if lhs.firmware != rhs.firmware {
+            return false
+        }
+        if lhs.batteryPct != rhs.batteryPct {
+            return false
+        }
+        if lhs.authResult != rhs.authResult {
+            return false
+        }
+        if lhs.keyInstalled != rhs.keyInstalled {
+            return false
+        }
+        if lhs.cursorReset != rhs.cursorReset {
+            return false
+        }
+        if lhs.features != rhs.features {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(serial)
+        hasher.combine(hardwareId)
+        hasher.combine(generation)
+        hasher.combine(firmware)
+        hasher.combine(batteryPct)
+        hasher.combine(authResult)
+        hasher.combine(keyInstalled)
+        hasher.combine(cursorReset)
+        hasher.combine(features)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePairReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PairReport {
+        return
+            try PairReport(
+                serial: FfiConverterString.read(from: &buf), 
+                hardwareId: FfiConverterOptionString.read(from: &buf), 
+                generation: FfiConverterOptionUInt8.read(from: &buf), 
+                firmware: FfiConverterOptionString.read(from: &buf), 
+                batteryPct: FfiConverterOptionUInt8.read(from: &buf), 
+                authResult: FfiConverterString.read(from: &buf), 
+                keyInstalled: FfiConverterBool.read(from: &buf), 
+                cursorReset: FfiConverterBool.read(from: &buf), 
+                features: FfiConverterSequenceTypeFeatureOutcomeFfi.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PairReport, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.serial, into: &buf)
+        FfiConverterOptionString.write(value.hardwareId, into: &buf)
+        FfiConverterOptionUInt8.write(value.generation, into: &buf)
+        FfiConverterOptionString.write(value.firmware, into: &buf)
+        FfiConverterOptionUInt8.write(value.batteryPct, into: &buf)
+        FfiConverterString.write(value.authResult, into: &buf)
+        FfiConverterBool.write(value.keyInstalled, into: &buf)
+        FfiConverterBool.write(value.cursorReset, into: &buf)
+        FfiConverterSequenceTypeFeatureOutcomeFfi.write(value.features, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePairReport_lift(_ buf: RustBuffer) throws -> PairReport {
+    return try FfiConverterTypePairReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePairReport_lower(_ value: PairReport) -> RustBuffer {
+    return FfiConverterTypePairReport.lower(value)
+}
+
+
+public struct ProbeReport {
+    public var serial: String
+    public var hardwareId: String?
+    /**
+     * Ring generation number (3/4/5), `None` when unknown.
+     */
+    public var generation: UInt8?
+    public var firmware: String?
+    public var ownership: RingOwnership
+    /**
+     * Raw auth state byte (0x00 ok, 0x01 rejected, 0x02 factory reset, 0x03
+     * other onboarding, 0xff = no nonce answer).
+     */
+    public var authState: UInt8
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serial: String, hardwareId: String?, 
+        /**
+         * Ring generation number (3/4/5), `None` when unknown.
+         */generation: UInt8?, firmware: String?, ownership: RingOwnership, 
+        /**
+         * Raw auth state byte (0x00 ok, 0x01 rejected, 0x02 factory reset, 0x03
+         * other onboarding, 0xff = no nonce answer).
+         */authState: UInt8) {
+        self.serial = serial
+        self.hardwareId = hardwareId
+        self.generation = generation
+        self.firmware = firmware
+        self.ownership = ownership
+        self.authState = authState
+    }
+}
+
+
+
+extension ProbeReport: Equatable, Hashable {
+    public static func ==(lhs: ProbeReport, rhs: ProbeReport) -> Bool {
+        if lhs.serial != rhs.serial {
+            return false
+        }
+        if lhs.hardwareId != rhs.hardwareId {
+            return false
+        }
+        if lhs.generation != rhs.generation {
+            return false
+        }
+        if lhs.firmware != rhs.firmware {
+            return false
+        }
+        if lhs.ownership != rhs.ownership {
+            return false
+        }
+        if lhs.authState != rhs.authState {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(serial)
+        hasher.combine(hardwareId)
+        hasher.combine(generation)
+        hasher.combine(firmware)
+        hasher.combine(ownership)
+        hasher.combine(authState)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProbeReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProbeReport {
+        return
+            try ProbeReport(
+                serial: FfiConverterString.read(from: &buf), 
+                hardwareId: FfiConverterOptionString.read(from: &buf), 
+                generation: FfiConverterOptionUInt8.read(from: &buf), 
+                firmware: FfiConverterOptionString.read(from: &buf), 
+                ownership: FfiConverterTypeRingOwnership.read(from: &buf), 
+                authState: FfiConverterUInt8.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProbeReport, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.serial, into: &buf)
+        FfiConverterOptionString.write(value.hardwareId, into: &buf)
+        FfiConverterOptionUInt8.write(value.generation, into: &buf)
+        FfiConverterOptionString.write(value.firmware, into: &buf)
+        FfiConverterTypeRingOwnership.write(value.ownership, into: &buf)
+        FfiConverterUInt8.write(value.authState, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProbeReport_lift(_ buf: RustBuffer) throws -> ProbeReport {
+    return try FfiConverterTypeProbeReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProbeReport_lower(_ value: ProbeReport) -> RustBuffer {
+    return FfiConverterTypeProbeReport.lower(value)
+}
+
+
+/**
+ * Options for [`RingSession::sync_with`].
+ */
+public struct SyncOptions {
+    /**
+     * Events per extended-drain batch (the cursor is checkpointed per batch).
+     * `0` = the library default (4096 ≈ one minute of transfer). A background
+     * refresh task with a ~25 s budget should use a few hundred.
+     */
+    public var batchEvents: UInt16
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Events per extended-drain batch (the cursor is checkpointed per batch).
+         * `0` = the library default (4096 ≈ one minute of transfer). A background
+         * refresh task with a ~25 s budget should use a few hundred.
+         */batchEvents: UInt16) {
+        self.batchEvents = batchEvents
+    }
+}
+
+
+
+extension SyncOptions: Equatable, Hashable {
+    public static func ==(lhs: SyncOptions, rhs: SyncOptions) -> Bool {
+        if lhs.batchEvents != rhs.batchEvents {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(batchEvents)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncOptions {
+        return
+            try SyncOptions(
+                batchEvents: FfiConverterUInt16.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SyncOptions, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.batchEvents, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncOptions_lift(_ buf: RustBuffer) throws -> SyncOptions {
+    return try FfiConverterTypeSyncOptions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncOptions_lower(_ value: SyncOptions) -> RustBuffer {
+    return FfiConverterTypeSyncOptions.lower(value)
 }
 
 
@@ -794,12 +1350,185 @@ public func FfiConverterTypeSyncReport_lower(_ value: SyncReport) -> RustBuffer 
     return FfiConverterTypeSyncReport.lower(value)
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Which measurement features [`RingSession::pair`] turns on afterwards.
+ */
+
+public enum FeaturePlanFfi {
+    
+    case none
+    case core
+    case full
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFeaturePlanFfi: FfiConverterRustBuffer {
+    typealias SwiftType = FeaturePlanFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FeaturePlanFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .none
+        
+        case 2: return .core
+        
+        case 3: return .full
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FeaturePlanFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .none:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .core:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .full:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFeaturePlanFfi_lift(_ buf: RustBuffer) throws -> FeaturePlanFfi {
+    return try FfiConverterTypeFeaturePlanFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFeaturePlanFfi_lower(_ value: FeaturePlanFfi) -> RustBuffer {
+    return FfiConverterTypeFeaturePlanFfi.lower(value)
+}
+
+
+
+extension FeaturePlanFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Who holds the ring, as told by the auth verdict (`RingSession::probe`).
+ */
+
+public enum RingOwnership {
+    
+    /**
+     * No key installed: pairing will be accepted.
+     */
+    case factoryReset
+    /**
+     * The key we hold authenticates: already paired with this app.
+     */
+    case pairedWithThisKey
+    /**
+     * Another key is installed (the official app or another host). Reset first.
+     */
+    case ownedElsewhere
+    /**
+     * Unexpected auth answer, or no answer to the nonce request.
+     */
+    case unknown
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRingOwnership: FfiConverterRustBuffer {
+    typealias SwiftType = RingOwnership
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RingOwnership {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .factoryReset
+        
+        case 2: return .pairedWithThisKey
+        
+        case 3: return .ownedElsewhere
+        
+        case 4: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RingOwnership, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .factoryReset:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .pairedWithThisKey:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .ownedElsewhere:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRingOwnership_lift(_ buf: RustBuffer) throws -> RingOwnership {
+    return try FfiConverterTypeRingOwnership.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRingOwnership_lower(_ value: RingOwnership) -> RustBuffer {
+    return FfiConverterTypeRingOwnership.lower(value)
+}
+
+
+
+extension RingOwnership: Equatable, Hashable {}
+
+
+
 
 public enum SyncError {
 
     
     
     case Failed(String
+    )
+    /**
+     * [`RingSession::cancel`] was called. The message carries the stage and the
+     * last checkpointed cursor; nothing is lost — call again to resume.
+     */
+    case Cancelled(String
     )
 }
 
@@ -820,6 +1549,9 @@ public struct FfiConverterTypeSyncError: FfiConverterRustBuffer {
         case 1: return .Failed(
             try FfiConverterString.read(from: &buf)
             )
+        case 2: return .Cancelled(
+            try FfiConverterString.read(from: &buf)
+            )
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -834,6 +1566,11 @@ public struct FfiConverterTypeSyncError: FfiConverterRustBuffer {
         
         case let .Failed(v1):
             writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Cancelled(v1):
+            writeInt(&buf, Int32(2))
             FfiConverterString.write(v1, into: &buf)
             
         }
@@ -1070,6 +1807,78 @@ extension FfiConverterCallbackInterfaceSyncProgressListener : FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = UInt8?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt8.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt8.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceUInt16: FfiConverterRustBuffer {
     typealias SwiftType = [UInt16]
 
@@ -1087,6 +1896,31 @@ fileprivate struct FfiConverterSequenceUInt16: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterUInt16.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFeatureOutcomeFfi: FfiConverterRustBuffer {
+    typealias SwiftType = [FeatureOutcomeFfi]
+
+    public static func write(_ value: [FeatureOutcomeFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFeatureOutcomeFfi.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FeatureOutcomeFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FeatureOutcomeFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFeatureOutcomeFfi.read(from: &buf))
         }
         return seq
     }
@@ -1147,6 +1981,21 @@ public func coreVersion() -> String {
 })
 }
 /**
+ * The Apple Health sample bundles — `oura_summary::health_export::health_samples`
+ * JSON (see that module for the contract). `tz_offset_s` is seconds from UTC and
+ * only decides day/hour boundaries; `since_unix` keeps only days whose data
+ * changed after that capture time. Returns `{ "error": "…" }` on failure.
+ */
+public func healthSamplesJson(dbPath: String, tzOffsetS: Int64, sinceUnix: Int64?) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_oura_core_fn_func_health_samples_json(
+        FfiConverterString.lower(dbPath),
+        FfiConverterInt64.lower(tzOffsetS),
+        FfiConverterOptionInt64.lower(sinceUnix),$0
+    )
+})
+}
+/**
  * A lightweight, model-free summary (device + data-health only) — kept as a fast
  * path / fallback. Returns `{ serials, device, event_counts, decoded_events }`.
  */
@@ -1165,6 +2014,17 @@ public func rmssd(ibiMs: [UInt16]) -> Double {
     return try!  FfiConverterDouble.lift(try! rustCall() {
     uniffi_oura_core_fn_func_rmssd(
         FfiConverterSequenceUInt16.lower(ibiMs),$0
+    )
+})
+}
+/**
+ * The store's `PRAGMA user_version` (migrating an older file in place), or -1
+ * when the file cannot be opened — including when it is NEWER than this build.
+ */
+public func storeSchemaVersion(dbPath: String) -> Int64 {
+    return try!  FfiConverterInt64.lift(try! rustCall() {
+    uniffi_oura_core_fn_func_store_schema_version(
+        FfiConverterString.lower(dbPath),$0
     )
 })
 }
@@ -1207,19 +2067,37 @@ private var initializationResult: InitializationResult = {
     if (uniffi_oura_core_checksum_func_core_version() != 24695) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_oura_core_checksum_func_health_samples_json() != 14620) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_oura_core_checksum_func_quick_summary_json() != 19199) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_rmssd() != 51404) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_oura_core_checksum_func_store_schema_version() != 1450) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_oura_core_checksum_func_summary_json() != 27782) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_method_ringsession_cancel() != 9190) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_method_ringsession_pair() != 17094) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_method_ringsession_probe() != 47370) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_method_ringsession_push_frame() != 19557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_oura_core_checksum_method_ringsession_sync() != 10321) {
+    if (uniffi_oura_core_checksum_method_ringsession_sync() != 55216) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_method_ringsession_sync_with() != 27359) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_constructor_ringsession_new() != 7650) {

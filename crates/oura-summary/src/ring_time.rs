@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-// A ring timestamp is a per-boot decisecond counter. `time_sync` events are the
-// authoritative bridge from that counter to UTC; captured_unix is only when the
+// A ring timestamp is a per-boot decisecond counter. `time_sync` and `rtc_beacon`
+// events are the authoritative bridge from that counter to UTC; captured_unix is only when the
 // phone downloaded the event and is therefore an epoch-selection hint/fallback.
 #[derive(Clone, Debug)]
 struct Epoch {
@@ -54,7 +54,10 @@ impl RingClock {
                     anchors: Vec::new(),
                 }),
             }
-            if *tag == 0x42 {
+            // `time_sync` (0x42) records the app's clock write; `rtc_beacon` (0x85)
+            // is the ring's own 1-second wall-clock beacon. Both carry `unix_time`
+            // and both anchor the epoch they fall in.
+            if *tag == 0x42 || *tag == 0x85 {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
                     if let Some(unix) = value["unix_time"].as_i64() {
                         epochs.last_mut().unwrap().anchors.push((*ds, unix));
@@ -174,6 +177,17 @@ mod tests {
         ]);
         let got = clock.unix_s(5_266_813, 1_783_543_500);
         assert!((got - 1_783_464_210.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn rtc_beacon_anchors_like_time_sync() {
+        let clock = RingClock::from_events(&[
+            event(1_000, 1, "{}", 1_783_543_000),
+            event(2_000, 0x85, r#"{"unix_time":1783490000,"trailer":0}"#, 1_783_543_500),
+            event(3_000, 1, "{}", 1_783_544_000),
+        ]);
+        assert_eq!(clock.unix_s(2_500, 1_783_543_500), 1_783_490_050.0);
+        assert_eq!(clock.latest_unix(), 1_783_490_000);
     }
 
     #[test]

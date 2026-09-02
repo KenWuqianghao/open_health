@@ -12,6 +12,8 @@
 //! *render* it: web `dashboard/web/app.js`, iOS `apps/ios/OuraApp/OuraApp.swift`. See
 //! `docs/clients-web-and-ios.md`.
 
+pub mod health_export;
+mod nights;
 mod ring_time;
 
 use std::path::{Path, PathBuf};
@@ -884,9 +886,6 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
     let clock = RingClock::from_events(&events);
     let unix_s_at = |ds: i64, captured_unix: i64| clock.unix_s(ds, captured_unix);
     let anchor_unix = clock.latest_unix();
-    let mut raw_beds: Vec<BedPeriod> = Vec::new();
-    let mut sleep_support: Vec<(i64, i64)> = Vec::new();
-    let mut pulse_support: Vec<(i64, i64, usize)> = Vec::new();
     let mut latest_hr: Option<(f64, f64)> = None; // (wall-clock unix, bpm)
     let mut present_recent = std::collections::HashSet::new();
     // "recent" = within 10 days of the newest data, measured in wall-clock so it never
@@ -898,67 +897,28 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
         if unix_s_at(*ds, *cu) >= recent_cut_unix {
             present_recent.insert(n);
         }
-        if n == "bedtime_period" {
+        // `green_ibi_quality_event.hr_bpm` contains only pulse estimates the
+        // firmware's quality gate accepted. Surface its newest value as the
+        // latest synchronized HR; raw IBI-derived values are too noisy for a
+        // user-facing "current" measurement.
+        if n == "green_ibi_quality_event" {
             if let Ok(v) = serde_json::from_str::<Value>(jstr) {
-                if let (Some(s), Some(e)) =
-                    (v["bedtime_start_ds"].as_i64(), v["bedtime_end_ds"].as_i64())
+                if let Some(bpm) = v["hr_bpm"]
+                    .as_array()
+                    .and_then(|values| values.iter().rev().find_map(Value::as_f64))
+                    .filter(|bpm| (30.0..=240.0).contains(bpm))
                 {
-                    match raw_beds.iter_mut().find(|bed| {
-                        bed.start_ds == s
-                            && (unix_s_at(bed.start_ds, bed.captured_unix) - unix_s_at(s, *cu))
-                                .abs()
-                                <= 5.0 * 60.0
-                    }) {
-                        Some(bed) => {
-                            bed.end_ds = bed.end_ds.max(e);
-                            bed.raw_end_ds = bed.raw_end_ds.max(e);
-                            bed.captured_unix = bed.captured_unix.max(*cu);
-                        }
-                        None => raw_beds.push(BedPeriod {
-                            start_ds: s,
-                            end_ds: e,
-                            raw_start_ds: s,
-                            raw_end_ds: e,
-                            captured_unix: *cu,
-                        }),
-                    }
-                }
-            }
-        }
-        if matches!(
-            n,
-            "sleep_acm_period" | "sleep_temp_event" | "spo2_r_pi_event"
-        ) {
-            sleep_support.push((*ds, *cu));
-        }
-        // Both SleepNet implementations already consume these two streams. `hr_bpm`
-        // is populated only when the firmware accepted a pulse estimate, so it is a
-        // stronger continuation signal than raw/invalid IBI values.
-        if matches!(n, "ibi_and_amplitude_event" | "green_ibi_quality_event") {
-            if let Ok(v) = serde_json::from_str::<Value>(jstr) {
-                if let Some(accepted) = v["hr_bpm"].as_array().map(Vec::len).filter(|&n| n > 0) {
-                    pulse_support.push((*ds, *cu, accepted));
-                }
-                // `green_ibi_quality_event.hr_bpm` contains only pulse estimates the
-                // firmware's quality gate accepted. Surface its newest value as the
-                // latest synchronized HR; raw IBI-derived values are too noisy for a
-                // user-facing "current" measurement.
-                if n == "green_ibi_quality_event" {
-                    if let Some(bpm) = v["hr_bpm"]
-                        .as_array()
-                        .and_then(|values| values.iter().rev().find_map(Value::as_f64))
-                        .filter(|bpm| (30.0..=240.0).contains(bpm))
-                    {
-                        let at = unix_s_at(*ds, *cu);
-                        if latest_hr.map_or(true, |(current, _)| at > current) {
-                            latest_hr = Some((at, bpm));
-                        }
+                    let at = unix_s_at(*ds, *cu);
+                    if latest_hr.map_or(true, |(current, _)| at > current) {
+                        latest_hr = Some((at, bpm));
                     }
                 }
             }
         }
     }
-    let beds = normalize_bed_periods(raw_beds, &sleep_support, &pulse_support, unix_s_at);
+    // Sleep windows: raw bedtime markers merged and extended by the sleep-only
+    // streams — the same model the Apple Health export uses (`nights.rs`).
+    let beds = nights::collect_bed_periods(&events, unix_s_at);
 
     let mut nights: Vec<Night> = beds
         .iter()
@@ -971,16 +931,8 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             ..Default::default()
         })
         .collect();
-    let find_night = |ds: i64, captured_unix: i64, nights: &[Night]| {
-        nights
-            .iter()
-            .enumerate()
-            .filter(|(_, nt)| nt.start_ds - 600 <= ds && ds <= nt.end_ds + 600)
-            .min_by_key(|(_, nt)| (nt.captured_unix - captured_unix).abs())
-            .map(|(idx, _)| idx)
-    };
     for (ds, tag, jstr, cu) in &events {
-        let Some(idx) = find_night(*ds, *cu, &nights) else {
+        let Some(idx) = nights::find_night(&beds, *ds, *cu) else {
             continue;
         };
         let n = name_of(*tag);

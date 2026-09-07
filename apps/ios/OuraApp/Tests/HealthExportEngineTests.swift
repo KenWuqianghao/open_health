@@ -46,6 +46,12 @@ final class HealthExportEngineTests: XCTestCase {
         var st = HealthExportState(); st.epoch = "e"; HealthExportStateStore.save(st)
     }
 
+    override func tearDown() {
+        // The test host shares the app's container: leave no state behind.
+        HealthExportStateStore.clear()
+        super.tearDown()
+    }
+
     private func envelope(_ days: [HealthDay]) -> HealthEnvelope {
         var e = HealthEnvelope()
         e.version = 1; e.serial = "S1"; e.hardware_id = "COR_05"; e.generation = 5

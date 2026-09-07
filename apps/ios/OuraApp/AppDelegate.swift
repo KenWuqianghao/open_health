@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             Task { await SyncCoordinator.shared.handleUnsolicitedConnect(peripheral) }
         }
         AppHooks.install()
+        // Must run before launch finishes: iOS refuses later registrations.
+        BGSync.register()
         return true
     }
 }

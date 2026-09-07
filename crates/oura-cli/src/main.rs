@@ -167,6 +167,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print the Apple Health sample bundles the iOS exporter writes (the shared
+    /// `oura-summary::health_export` brain), as a per-day table or raw JSON. A
+    /// desktop cross-check for what lands in Health.
+    HealthSamples {
+        /// Timezone offset (hours from UTC) for day/hour boundaries.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+        /// Only this day (YYYY-MM-DD).
+        #[arg(long)]
+        day: Option<String>,
+        /// Emit the raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Subscribe a feature capability (real_steps | atlas | ambient | raw_data |
     /// research_data) via SetFeatureSubscription, to make the ring emit its events.
     Subscribe {
@@ -372,6 +386,7 @@ async fn main() -> Result<()> {
             json,
         } => cmd_sleep_score(&cli, *tz_offset, csv.clone(), *json),
         Command::ReadinessScore { tz_offset, json } => cmd_readiness_score(&cli, *tz_offset, *json),
+        Command::HealthSamples { tz_offset, day, json } => cmd_health_samples(&cli, *tz_offset, day.as_deref(), *json),
         Command::Subscribe { feature, mode } => cmd_subscribe(&cli, &key, feature, mode).await,
         Command::FeatureMode { feature, mode } => cmd_feature_mode(&cli, &key, feature, mode).await,
         Command::FeatureStatus => cmd_feature_status(&cli, &key).await,
@@ -629,6 +644,69 @@ fn cmd_sleep_score(cli: &Cli, tz_offset: i64, csv: Option<PathBuf>, json: bool) 
 /// Readiness Score live from ring data: rebuild the daily_summary + rolling
 /// baselines (tools/build_daily.py), then score with the calibrated curves
 /// (tools/score_readiness.py). Both run via the Python venv with torch.
+fn cmd_health_samples(cli: &Cli, tz_offset_h: i64, day: Option<&str>, json: bool) -> Result<()> {
+    let v = oura_summary::health_export::health_samples(&cli.db, tz_offset_h * 3600, None)?;
+    let days: Vec<&serde_json::Value> = v["days"]
+        .as_array()
+        .map(|a| a.iter().filter(|d| day.is_none_or(|w| d["ymd"] == w)).collect())
+        .unwrap_or_default();
+    if json {
+        if day.is_some() {
+            println!("{}", serde_json::to_string_pretty(&days)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        return Ok(());
+    }
+    println!(
+        "device {} ({}) fw {} · spo2 calibration {} · {} day(s)",
+        v["serial"].as_str().unwrap_or("?"),
+        v["hardware_id"].as_str().unwrap_or("?"),
+        v["firmware"].as_str().unwrap_or("?"),
+        v["spo2_calibration"].as_str().unwrap_or("?"),
+        days.len()
+    );
+    println!(
+        "{:<10} {:>5} {:>5} {:>5} {:>5} {:>4} {:>6} {:>7} {:>5}  night",
+        "day", "final", "hr", "hrv", "sdnn", "spo2", "steps", "kcal", "rhr"
+    );
+    let n = |d: &serde_json::Value, k: &str| d[k].as_array().map(Vec::len).unwrap_or(0);
+    for d in days {
+        let sdnn = d["hrv"]
+            .as_array()
+            .map(|a| a.iter().filter(|w| !w["sdnn_ms"].is_null()).count())
+            .unwrap_or(0);
+        let steps: i64 = d["steps"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|b| b["count"].as_i64()).sum())
+            .unwrap_or(0);
+        // `+ 0.0` turns the -0.0 identity of an empty f64 sum into "0" in the table.
+        let kcal: f64 = d["active_energy"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|b| b["kcal"].as_f64()).sum::<f64>() + 0.0)
+            .unwrap_or(0.0);
+        let night = match (d["night"]["start_unix"].as_i64(), d["night"]["end_unix"].as_i64()) {
+            (Some(s), Some(e)) => format!("{:.1} h in bed", (e - s) as f64 / 3600.0),
+            _ => "—".to_string(),
+        };
+        println!(
+            "{:<10} {:>5} {:>5} {:>5} {:>5} {:>4} {:>6} {:>7.0} {:>5}  {}{}",
+            d["ymd"].as_str().unwrap_or("?"),
+            if d["finalized"].as_bool().unwrap_or(false) { "yes" } else { "no" },
+            n(d, "heart_rate"),
+            n(d, "hrv"),
+            sdnn,
+            n(d, "spo2"),
+            steps,
+            kcal,
+            d["resting_hr"]["bpm"].as_f64().map(|b| format!("{b:.0}")).unwrap_or("—".into()),
+            night,
+            d["warnings"].as_array().filter(|w| !w.is_empty()).map(|w| format!(" ⚠ {}", w.len())).unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
 fn cmd_readiness_score(cli: &Cli, tz_offset: i64, json: bool) -> Result<()> {
     let root = pyrunner::require_repo_root(
         Path::new("tools/score_readiness.py"),

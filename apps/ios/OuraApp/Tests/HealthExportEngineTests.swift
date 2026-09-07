@@ -29,13 +29,21 @@ final class FakeHealthStore: HealthStoreClient, @unchecked Sendable {
     func countOurObjects(of type: HKSampleType, in window: DateInterval) async throws -> Int { 0 }
 }
 
+/// A clock the engine reads through a reference, so a test can move time forward.
+final class ClockBox: @unchecked Sendable {
+    var date = Date(timeIntervalSince1970: 1_767_400_000)
+}
+
 final class HealthExportEngineTests: XCTestCase {
     private let anchor: Double = 1_767_268_800
-    private var clock = Date(timeIntervalSince1970: 1_767_400_000)
+    private let clock = ClockBox()
 
     override func setUp() {
         super.setUp()
         HealthExportStateStore.clear()
+        clock.date = Date(timeIntervalSince1970: 1_767_400_000)
+        // Every test starts at the current epoch, so the first run is not a purge.
+        var st = HealthExportState(); st.epoch = "e"; HealthExportStateStore.save(st)
     }
 
     private func envelope(_ days: [HealthDay]) -> HealthEnvelope {
@@ -56,8 +64,8 @@ final class HealthExportEngineTests: XCTestCase {
     }
 
     private func engine(_ store: FakeHealthStore) -> HealthExportEngine {
-        let now = { [clock] in clock }
-        return HealthExportEngine(client: store, now: now)
+        let box = clock
+        return HealthExportEngine(client: store, now: { box.date })
     }
 
     func testTwoRunsAreIdempotentAndTheSecondSkipsUnchangedDays() async {
@@ -94,7 +102,7 @@ final class HealthExportEngineTests: XCTestCase {
         var env = envelope([day("2026-01-02", offsetDays: 1, finalized: false, fp: "b"),
                             day("2026-01-03", offsetDays: 2, finalized: false, fp: "c")])
         _ = await eng.run(.sync, envelope: env, summary: nil, includeBasal: false, epoch: "e") { _ in }
-        clock = clock.addingTimeInterval(3600)
+        clock.date = clock.date.addingTimeInterval(3600)
         env.days[1] = day("2026-01-03", offsetDays: 2, finalized: false, fp: "c2", steps: 500)
         let out = await eng.run(.sync, envelope: env, summary: nil, includeBasal: false, epoch: "e") { _ in }
         XCTAssertEqual(out.daysWritten, 1)

@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "2fd398fd986d2dc421fd614e65675fe0ea4f9dbc" }
-oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "2fd398fd986d2dc421fd614e65675fe0ea4f9dbc" }
-oura-analysis = { git = "https://github.com/KenWuqianghao/open_oura", rev = "2fd398fd986d2dc421fd614e65675fe0ea4f9dbc" }
+oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "3618c54f47a988b0886681b8eeee53941e240186" }
+oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "3618c54f47a988b0886681b8eeee53941e240186" }
+oura-analysis = { git = "https://github.com/KenWuqianghao/open_oura", rev = "3618c54f47a988b0886681b8eeee53941e240186" }
 serde_json = "1"
 anyhow = "1"

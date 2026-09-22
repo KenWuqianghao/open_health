@@ -111,9 +111,16 @@ podman run -d --name oura-tunnel --restart unless-stopped --network=host docker.
 podman logs oura-tunnel 2>&1 | grep -o "https://[a-z0-9-]*\.trycloudflare\.com" | head -1
 ```
 
-For a name that stays the same, make a named Cloudflare tunnel on your own domain
-(`cloudflared tunnel login`, `tunnel create`, `tunnel route dns`) or enable Tailscale
-Funnel in the admin console and run `tailscale funnel --bg 8787`.
+For a name that stays the same, use **Tailscale Funnel**: enable it once in the admin
+console (the `tailscale funnel` command prints the link), then on the server:
+
+```bash
+tailscale funnel --bg 8787
+```
+
+The hub is then `https://<server>.<tailnet>.ts.net` for the whole internet, with a
+certificate from Tailscale. Only the token protects it, so keep the token secret and
+rotate it if it leaks. A named Cloudflare tunnel on your own domain works as well.
 
 ## Setup on an Ubuntu server, reachable from anywhere
 

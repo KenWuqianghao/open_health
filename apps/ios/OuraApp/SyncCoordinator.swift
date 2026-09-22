@@ -79,7 +79,7 @@ struct SyncPolicy: Sendable {
                               runModels: true, refreshSummary: true, exportHealth: true, idleLock: true)
         case .bgRefresh:
             return SyncPolicy(attempts: 1, connectTimeout: 8, deadline: 22, batchEvents: 512,
-                              connect: .known,
+                              connect: .knownThenScan(scanTimeout: 8, mode: .background),
                               runModels: false, refreshSummary: false, exportHealth: true, idleLock: false)
         case .bgProcessing:
             return SyncPolicy(attempts: 3, connectTimeout: 30, deadline: 5 * 60, batchEvents: 0,
@@ -192,6 +192,7 @@ actor SyncCoordinator {
     var hooks = SyncHooks()
 
     private static let lastSuccessKey = "ring.last-successful-sync-at"
+    private static let lastCursorKey = "ring.last-cursor"
     private static let syncIncompleteKey = "ring.sync-incomplete"
     static let automaticSyncCooldown: TimeInterval = 3 * 60
     private var lastAutomaticAttemptAt: Date?
@@ -272,8 +273,13 @@ actor SyncCoordinator {
             if let reuse { RingCentral.shared.release(reuse, policy: SyncSettings.linkPolicy) }
             return .skipped(.busy)
         }
+        // Claim the slot before the first await. The actor is reentrant, so two
+        // triggers that arrive together (bleRestore and foreground at launch) would
+        // otherwise both pass the guard and drive the same link at once.
+        current = Run(trigger: trigger, session: nil, transport: reuse, deadlineTask: nil, cancelReason: nil)
         let policy = SyncPolicy.policy(for: trigger)
         var metrics = SyncMetrics(trigger: trigger, startedAt: Date())
+        metrics.cursorBefore = UInt32(clamping: UserDefaults.standard.integer(forKey: Self.lastCursorKey))
         metrics.appState = await MainActor.run { Self.appStateName(UIApplication.shared.applicationState) }
         metrics.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         metrics.availableMemMB = Int(os_proc_available_memory() / 1_048_576)
@@ -287,12 +293,12 @@ actor SyncCoordinator {
             metrics.exit = PairedRingStore.load() == nil ? .notPaired : .noKey
             metrics.detail = "no auth key in the Keychain (locked phone before first unlock, or not paired)"
             if let reuse { RingCentral.shared.release(reuse, policy: SyncSettings.linkPolicy) }
+            current = nil
             record(metrics)
             return .skipped(metrics.exit)
         }
         metrics.keyReadable = true
 
-        current = Run(trigger: trigger, session: nil, transport: reuse, deadlineTask: nil, cancelReason: nil)
         markedIncompleteThisRun = false
         RingDiag.shared.clear()
         dlog("sync", "run trigger=\(trigger.rawValue) app=\(metrics.appState) lowPower=\(metrics.lowPower) mem=\(metrics.availableMemMB)MB")
@@ -373,6 +379,7 @@ actor SyncCoordinator {
                 metrics.events = report.eventsSynced
                 metrics.inserted = report.inserted
                 metrics.cursorAfter = report.nextCursor
+                UserDefaults.standard.set(Int(report.nextCursor), forKey: Self.lastCursorKey)
                 metrics.exit = .completed
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSuccessKey)
                 UserDefaults.standard.removeObject(forKey: Self.syncIncompleteKey)
@@ -491,12 +498,22 @@ actor SyncCoordinator {
             }
             let found = try await central.scanForRing(timeout: scanTimeout, mode: mode)
             try await central.connect(found, timeout: policy.connectTimeout)
+            Self.noteIdentifier(of: found)
             peripheral = found
         case .scan(let timeout):
             let found = try await central.scanForRing(timeout: timeout, mode: .foreground)
             try await central.connect(found, timeout: policy.connectTimeout)
+            Self.noteIdentifier(of: found)
             peripheral = found
         }
         return central.claim(peripheral, for: trigger)
+    }
+
+    /// A scan found the ring under a rotated address: remember it so the next
+    /// known-identifier connect and the armed connect target the right one.
+    private static func noteIdentifier(of peripheral: CBPeripheral) {
+        guard let ring = PairedRingStore.load(), ring.peripheralID != peripheral.identifier else { return }
+        PairedRingStore.updatePeripheralID(peripheral.identifier)
+        dlog("sync", "ring found under a new identifier \(peripheral.identifier.uuidString.suffix(12)) — saved")
     }
 }

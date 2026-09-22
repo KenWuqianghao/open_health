@@ -41,6 +41,23 @@ The setting "After a sync" in the Sync screen has two values:
   The ring has one link. A wake that finds no new data waits 15 minutes before it
   asks iOS to reconnect again.
 
+## How the app finds the ring again
+
+When no link is up, the app "arms" two things at once:
+
+- a pending connect on the ring's last known CoreBluetooth identifier, and
+- a scan filtered on the Oura service UUID.
+
+iOS wakes the app for either. The scan matters because an unbonded ring rotates its
+Bluetooth address, and then the identifier iOS gave the ring changes. Every scan that
+finds the ring saves the new identifier. All sync scans use the service filter: iOS
+drops an unfiltered scan as soon as the app leaves the foreground.
+
+A Ring 3 (Gen3) drops the link about two seconds after a configuration write, for
+example the key install during pairing. The pairing keeps the key and retries over a
+fresh link. A missing reply to the auth challenge counts as a link problem and is
+retried; only a verdict from the ring counts as a rejected key.
+
 ## What you must do
 
 1. Keep Background App Refresh on for Open Oura (Settings > General > Background
@@ -59,6 +76,8 @@ The setting "After a sync" in the Sync screen has two values:
 - A force-quit (swipe up in the app switcher) stops all background wakes until the
   user opens the app again.
 - Bluetooth off stops everything.
+- The ring's radio is weak. A worn ring a few metres from the phone connects and then
+  times out. Keep the phone within arm's reach for a sync.
 - Apple Health writes need the phone unlocked once. A pass that runs while the
   phone is locked is deferred and finishes after the next unlock.
 

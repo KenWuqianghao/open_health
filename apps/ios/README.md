@@ -181,10 +181,11 @@ all of that to Apple Health.
    `automatic_activity_detection_3_1_12`, `steps_motion_decoder_2_0_0`,
    `illness_detection_0_5_1`.
 3. Build LibTorch for iOS once (it compiles PyTorch 2.9; count on an hour per slice
-   and 15 GB of disk):
+   and about 8 GB of disk for the source plus each slice). The device slice is
+   enough for a phone; the simulator slice adds simulator runs of the torch build:
    ```bash
    ./apps/ios/spike/build_libtorch_ios.sh device
-   ./apps/ios/spike/build_libtorch_ios.sh
+   ./apps/ios/spike/build_libtorch_ios.sh          # optional, simulator
    ./apps/ios/package-libtorch-xcframeworks.sh
    ```
 4. Generate the torch project and build it the same way as above:

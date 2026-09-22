@@ -32,7 +32,13 @@ consumed here as Git dependencies.
 Keep reusable protocol/library work in `open_oura`. Keep app UX, dashboard APIs,
 iOS presentation, DNA, blood, and model orchestration here.
 
-## Quick start
+## iOS app
+
+[`apps/ios/README.md`](apps/ios/README.md) is the step-by-step guide: build the Rust
+core, sign and install on your iPhone, factory-reset and pair the ring, turn on the
+Apple Health export.
+
+## Quick start (web dashboard)
 
 ```bash
 cargo build --release
@@ -53,5 +59,5 @@ The dashboard reads local files only. Genome files, blood PDFs, generated
 cargo test --workspace
 ```
 
-For the iOS app, use the scripts under `apps/ios/` after rebuilding the Rust FFI
-artifacts.
+For the iOS app, follow [`apps/ios/README.md`](apps/ios/README.md): it goes from a
+clean Mac to a paired ring, Apple Health export, and background sync.

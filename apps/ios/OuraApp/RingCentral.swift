@@ -88,12 +88,6 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     var state: CBManagerState { central.state }
 
-    var ownsLink: Bool {
-        lock.lock(); defer { lock.unlock() }
-        if case .owned = ownership { return true }
-        return false
-    }
-
     var parkedPeripheral: CBPeripheral? {
         lock.lock(); defer { lock.unlock() }
         if case .parked(let p) = ownership { return p }
@@ -149,12 +143,29 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         return central.retrievePeripherals(withIdentifiers: [id]).first
     }
 
-    /// A ring some OTHER app on this phone is connected to right now.
+    /// A ring some OTHER app on this phone is connected to right now. Our own link,
+    /// whether owned by a sync, parked, or armed, is never reported.
     func systemConnectedRing() -> CBPeripheral? {
         guard central.state == .poweredOn else { return nil }
-        let ours = pairedPeripheral()?.identifier
+        var ours = Set<UUID>()
+        if let id = pairedPeripheral()?.identifier { ours.insert(id) }
+        lock.lock()
+        switch ownership {
+        case .owned(_, let t): ours.insert(t.peripheral.identifier)
+        case .parked(let p): ours.insert(p.identifier)
+        case .armed(let p): if let p { ours.insert(p.identifier) }
+        case .free: break
+        }
+        lock.unlock()
         return central.retrieveConnectedPeripherals(withServices: [RingUUID.service])
-            .first { $0.identifier != ours || !ownsLink }
+            .first { !ours.contains($0.identifier) }
+    }
+
+    /// True while nothing is connected and the app only waits for the ring.
+    var isArmed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if case .armed = ownership { return true }
+        return false
     }
 
     // ── discovery (pairing list) ──

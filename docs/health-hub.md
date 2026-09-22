@@ -149,6 +149,16 @@ already has that data from the ring, and sending it back would count it twice.
 Samples from every other source go out, with the source name and the device model,
 so the hub can tell the Watch from the iPhone or another app.
 
+**Background delivery.** With the switch on, the app registers a HealthKit observer
+for every type at launch and asks iOS for background delivery. When the Watch syncs,
+or another app writes, iOS wakes the app; the app pushes the changes under a short
+background task and tells HealthKit it is done. A burst of updates (one per type)
+becomes one push. HealthKit limits steps, energy, exercise, stand, and distance to
+one delivery per hour; the other types arrive at once. So heart rate, HRV, sleep,
+and workouts reach the hub within minutes; the daily counters within the hour.
+Background delivery does not run on the simulator, and a force-quit stops it until
+the app is opened again.
+
 The hub keeps them in `hub.db` (`health_samples`, one row per sample UUID). Two tools
 read them:
 
@@ -252,5 +262,4 @@ Give the agent a daily trigger and a prompt like this:
 
 ## Next steps
 
-1. HealthKit background delivery pushes within minutes of new Watch data.
-2. The hub builds the summary from its own replica when no summary was pushed.
+1. The hub builds the summary from its own replica when no summary was pushed.

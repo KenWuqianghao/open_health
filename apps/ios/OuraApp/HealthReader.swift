@@ -83,6 +83,12 @@ protocol HealthReadClient: AnyObject, Sendable {
     var isAvailable: Bool { get }
     func requestRead(_ types: Set<HKObjectType>) async throws
     func page(_ type: HKSampleType, after anchor: HKQueryAnchor?, limit: Int) async throws -> HealthPage
+    /// Ask iOS to wake the app when `type` changes.
+    func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws
+    func disableAllBackgroundDelivery() async throws
+    /// A long-running observer. `fire` gets a completion to call once the change is
+    /// handled; iOS counts unfinished ones against the app. Keep the returned query.
+    func observe(_ type: HKSampleType, fire: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) -> AnyObject
 }
 
 final class HKReadClient: HealthReadClient, @unchecked Sendable {
@@ -91,6 +97,27 @@ final class HKReadClient: HealthReadClient, @unchecked Sendable {
 
     func requestRead(_ types: Set<HKObjectType>) async throws {
         try await store.requestAuthorization(toShare: [], read: types)
+    }
+
+    func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws {
+        try await store.enableBackgroundDelivery(for: type, frequency: frequency)
+    }
+
+    func disableAllBackgroundDelivery() async throws {
+        try await store.disableAllBackgroundDelivery()
+    }
+
+    func observe(_ type: HKSampleType, fire: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) -> AnyObject {
+        let q = HKObserverQuery(sampleType: type, predicate: nil) { _, completion, error in
+            if let error {
+                dlog("health-read", "observer \(type.identifier): \(error.localizedDescription)")
+                completion()
+                return
+            }
+            fire { completion() }
+        }
+        store.execute(q)
+        return q
     }
 
     func page(_ type: HKSampleType, after anchor: HKQueryAnchor?, limit: Int) async throws -> HealthPage {
@@ -331,7 +358,7 @@ final class HealthReader: ObservableObject {
     @Published private(set) var enabled: Bool
     @Published private(set) var status = HealthReadStatus()
     let engine: HealthReadEngine
-    private let client: HealthReadClient
+    let client: HealthReadClient
 
     init(client: HealthReadClient = HKReadClient()) {
         self.client = client
@@ -348,6 +375,7 @@ final class HealthReader: ObservableObject {
         guard on else {
             enabled = false
             UserDefaults.standard.set(false, forKey: Self.enabledKey)
+            await HealthBackground.shared.stop()
             return
         }
         guard isAvailable else {
@@ -365,6 +393,7 @@ final class HealthReader: ObservableObject {
         enabled = true
         UserDefaults.standard.set(true, forKey: Self.enabledKey)
         dlog("health-read", "reading enabled")
+        await HealthBackground.shared.start()
     }
 
     @MainActor

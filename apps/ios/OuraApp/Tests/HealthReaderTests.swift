@@ -9,7 +9,21 @@ final class FakeHealthReadClient: HealthReadClient, @unchecked Sendable {
     var asked: [(String, HKQueryAnchor?)] = []
     var failKind: String?
 
+    var delivery: [(String, HKUpdateFrequency)] = []
+    var observed: [String] = []
+    var disabled = 0
+    var fires: [String: (@escaping @Sendable () -> Void) -> Void] = [:]
+
     func requestRead(_ types: Set<HKObjectType>) async throws {}
+    func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws {
+        delivery.append((type.identifier, frequency))
+    }
+    func disableAllBackgroundDelivery() async throws { disabled += 1 }
+    func observe(_ type: HKSampleType, fire: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) -> AnyObject {
+        observed.append(type.identifier)
+        fires[type.identifier] = fire
+        return NSObject()
+    }
     func page(_ type: HKSampleType, after anchor: HKQueryAnchor?, limit: Int) async throws -> HealthPage {
         let key = type.identifier
         asked.append((key, anchor))

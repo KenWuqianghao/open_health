@@ -1981,6 +1981,21 @@ public func coreVersion() -> String {
 })
 }
 /**
+ * Raw rows after the given ids, for replication to an always-on hub:
+ * `{ schema_version, devices, events, readings, next_event_id, next_reading_id, more }`
+ * (see `oura_store::replication`), or `{ "error": "…" }`.
+ */
+public func exportBatchJson(dbPath: String, afterEventId: Int64, afterReadingId: Int64, limit: UInt32) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_oura_core_fn_func_export_batch_json(
+        FfiConverterString.lower(dbPath),
+        FfiConverterInt64.lower(afterEventId),
+        FfiConverterInt64.lower(afterReadingId),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+/**
  * The Apple Health sample bundles — `oura_summary::health_export::health_samples`
  * JSON (see that module for the contract). `tz_offset_s` is seconds from UTC and
  * only decides day/hour boundaries; `since_unix` keeps only days whose data
@@ -2065,6 +2080,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_oura_core_checksum_func_core_version() != 24695) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_func_export_batch_json() != 21271) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_health_samples_json() != 14620) {

@@ -10,7 +10,22 @@ use oura_hub::store::Store;
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 fn app() -> axum::Router {
-    oura_hub::router(oura_hub::app_state(Store::in_memory().unwrap(), TOKEN.into()))
+    oura_hub::router(oura_hub::app_state(Store::in_memory().unwrap(), oura_store::Store::open_in_memory().unwrap(), TOKEN.into()))
+}
+
+fn ring_batch() -> Value {
+    let src = oura_store::Store::open_in_memory().unwrap();
+    src.upsert_device("S1", Some("HW"), None).unwrap();
+    for i in 0..3u32 {
+        let ev = oura_protocol_event(i * 10, vec![i as u8, 0xaa]);
+        src.insert_event_at("S1", &ev, 1_000 + i as i64).unwrap();
+    }
+    src.insert_reading("S1", "battery", 70.0, "%").unwrap();
+    serde_json::to_value(src.export_after(0, 0, 100).unwrap()).unwrap()
+}
+
+fn oura_protocol_event(ts: u32, body: Vec<u8>) -> oura_protocol::events::RingEvent {
+    oura_protocol::events::RingEvent { tag: 0x41, name: "ring_start", timestamp: ts, body, decoded: None }
 }
 
 fn summary() -> Value {
@@ -134,4 +149,39 @@ fn token_compare_is_strict() {
     assert!(!oura_hub::token_matches("ab", "abc"));
     assert!(!oura_hub::token_matches("abd", "abc"));
     assert!(!oura_hub::token_matches("", ""));
+}
+
+#[tokio::test]
+async fn ring_rows_round_trip_through_the_replica() {
+    let app = app();
+    let batch = ring_batch();
+    let (s, _) = send(&app, post("/ingest/events", None, batch.clone())).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    let (s, out) = send(&app, post("/ingest/events", Some(TOKEN), batch.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["events_inserted"], 3);
+    assert_eq!(out["readings_inserted"], 1);
+    assert_eq!(out["max_event_id"], 3);
+    let (_, again) = send(&app, post("/ingest/events", Some(TOKEN), batch.clone())).await;
+    assert_eq!(again["events_inserted"], 0);
+
+    let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    assert_eq!(h["ring"]["max_event_id"], 3);
+    assert_eq!(h["ring"]["serials"][0], "S1");
+
+    let req = Request::get("/export/events?after_event_id=1&limit=1")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty()).unwrap();
+    let (s, page) = send(&app, req).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(page["events"].as_array().unwrap().len(), 1);
+    assert_eq!(page["events"][0]["id"], 2);
+    assert_eq!(page["more"], true);
+
+    let mut newer = batch;
+    newer["schema_version"] = json!(999);
+    let (s, e) = send(&app, post("/ingest/events", Some(TOKEN), newer)).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(e["error"].as_str().unwrap().contains("newer"));
 }

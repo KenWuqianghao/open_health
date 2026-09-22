@@ -35,13 +35,17 @@ enum AppHooks {
         // 2. The summary cache, so a widget-less relaunch shows fresh numbers and the
         //    exporter has stages/workouts to match. Skipped when the budget is short.
         var summary: Summary?
+        var rawJson: String?
+        // The last summary that carries model results, for the hub push below.
+        let previousFull = SummaryCache.load()
         if policy.refreshSummary {
             let started = Date()
-            let base = Core.base()
+            let built = Core.baseWithJson()
             SyncSettings.lastSummaryBuildSeconds = Date().timeIntervalSince(started)
-            if base.error == nil {
-                SummaryCache.save(base)
-                summary = base
+            if built.summary.error == nil {
+                SummaryCache.save(built.summary)
+                summary = built.summary
+                rawJson = built.json
             }
             dlog("hooks", "summary rebuilt in \(String(format: "%.1f", SyncSettings.lastSummaryBuildSeconds))s")
         }
@@ -50,13 +54,20 @@ enum AppHooks {
             await HealthExporter.shared.run(trigger == .manual || trigger == .postPair ? .sync : .backgroundSync,
                                             summary: summary)
         }
-        // 4. Models: only with a generous budget and a healthy device. The foreground
+        // 4. The hub: the summary (last model results folded in) and the new raw rows.
+        //    A refresh task has about 22 s in all; the deadline keeps the push inside it.
+        await HubPusher.shared.pushAll(rawJson: rawJson, models: previousFull ?? summary, reason: trigger.rawValue,
+                                       deadline: trigger == .bgRefresh ? 8 : 40)
+        // 5. Models: only with a generous budget and a healthy device. The foreground
         //    path runs them from RootView.load instead.
         #if TORCH
         if policy.runModels, trigger == .bgProcessing, let base = summary, modelGate() {
-            let full = Core.withModels(base, previous: SummaryCache.load())
+            let full = Core.withModels(base, previous: previousFull)
             SummaryCache.save(full)
             await HealthExporter.shared.run(.modelsUpdated, summary: full)
+            if let rawJson {
+                await HubPusher.shared.pushSummary(rawJson: rawJson, models: full, reason: "models", timeout: 20)
+            }
         }
         #endif
     }

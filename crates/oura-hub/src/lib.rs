@@ -1,17 +1,20 @@
 //! The always-on health hub.
 //!
-//! Clients push a `build_summary` JSON to `POST /ingest/summary`. Agents read it
-//! through MCP at `POST /mcp/<token>` (or `POST /mcp` with a bearer token). The
-//! process holds no state outside the SQLite file, so it restarts cleanly.
+//! Clients push a `build_summary` JSON to `POST /ingest/summary` and the raw ring
+//! rows to `POST /ingest/events`. Agents read the summary through MCP at
+//! `POST /mcp/<token>` (or `POST /mcp` with a bearer token). The raw rows live in a
+//! second SQLite file with the `oura-store` schema, so the hub is a full replica of
+//! the ring data: `oura dashboard --db` runs on it, and `GET /export/events` gives
+//! the rows back. The process holds no state outside the two files.
 
 pub mod mcp;
 pub mod store;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -19,6 +22,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use mcp::{Reply, Server, Tool};
+use oura_store::replication::ExportBatch;
 use store::Store;
 
 /// Snapshots kept after each push.
@@ -28,9 +32,14 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct AppState {
     pub store: Arc<Store>,
+    /// The ring replica: raw events, readings, devices in the `oura-store` schema.
+    pub ring: Mutex<oura_store::Store>,
     pub token: String,
     pub mcp: Server,
 }
+
+/// Rows per page on `GET /export/events`.
+pub const EXPORT_PAGE: usize = 2000;
 
 pub fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -111,11 +120,12 @@ pub fn tools(store_for_handler: Arc<Store>) -> (Vec<Tool>, mcp::Handler) {
     (tools, handler)
 }
 
-pub fn app_state(store: Store, token: String) -> Arc<AppState> {
+pub fn app_state(store: Store, ring: oura_store::Store, token: String) -> Arc<AppState> {
     let store = Arc::new(store);
     let (tools, handler) = tools(store.clone());
     Arc::new(AppState {
         store,
+        ring: Mutex::new(ring),
         token,
         mcp: Server {
             name: "oura-hub",
@@ -131,6 +141,8 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ingest/summary", post(ingest))
+        .route("/ingest/events", post(ingest_events))
+        .route("/export/events", get(export_events))
         .route("/mcp", post(mcp_bearer).get(mcp_no_stream).delete(mcp_no_stream))
         .route("/mcp/{token}", post(mcp_path).get(mcp_no_stream).delete(mcp_no_stream))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -139,13 +151,71 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn health(State(st): State<Arc<AppState>>) -> Response {
     let latest = st.store.latest().ok().flatten();
+    let (ring_ids, serials) = {
+        let ring = st.ring.lock().unwrap();
+        (ring.max_ids().unwrap_or((0, 0)), ring.device_serials().unwrap_or_default())
+    };
     Json(json!({
         "ok": true,
         "snapshots": st.store.count().unwrap_or(0),
         "latest_received_at": latest.as_ref().map(|s| s.received_at),
         "latest_generated_at": latest.as_ref().and_then(|s| s.generated_at),
+        "ring": {
+            "serials": serials,
+            "max_event_id": ring_ids.0,
+            "max_reading_id": ring_ids.1,
+        },
     }))
     .into_response()
+}
+
+/// Raw rows from a phone or desktop store. Idempotent: the replica keeps its own
+/// ids and ignores rows it already holds.
+async fn ingest_events(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+    if !bearer(&headers).is_some_and(|t| token_matches(t, &st.token)) {
+        return unauthorized();
+    }
+    let batch: ExportBatch = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("invalid batch: {e}") }))).into_response(),
+    };
+    if batch.schema_version > oura_store::storage::SCHEMA_VERSION {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+            "error": format!("batch schema {} is newer than this hub's {}; update the hub",
+                             batch.schema_version, oura_store::storage::SCHEMA_VERSION)
+        }))).into_response();
+    }
+    let outcome = {
+        let ring = st.ring.lock().unwrap();
+        ring.import_batch(&batch)
+    };
+    match outcome {
+        Ok(out) => Json(serde_json::to_value(out).unwrap_or(Value::Null)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ExportQuery {
+    after_event_id: Option<i64>,
+    after_reading_id: Option<i64>,
+    limit: Option<usize>,
+}
+
+/// The replica's rows back out, in pages: restore a phone or a desktop from the hub.
+async fn export_events(State(st): State<Arc<AppState>>, headers: HeaderMap, Query(q): Query<ExportQuery>) -> Response {
+    if !bearer(&headers).is_some_and(|t| token_matches(t, &st.token)) {
+        return unauthorized();
+    }
+    let batch = {
+        let ring = st.ring.lock().unwrap();
+        ring.export_after(q.after_event_id.unwrap_or(0), q.after_reading_id.unwrap_or(0),
+                          q.limit.unwrap_or(EXPORT_PAGE).min(EXPORT_PAGE))
+    };
+    match batch {
+        Ok(b) => Json(serde_json::to_value(b).unwrap_or(Value::Null)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
 }
 
 async fn ingest(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {

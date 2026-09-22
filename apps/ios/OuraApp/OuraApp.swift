@@ -564,7 +564,8 @@ struct RootView: View {
         modelProgress.begin(generation)
         let progress = modelProgress.sink(generation)
         DispatchQueue.global(qos: .userInitiated).async {
-            let base = Core.base()
+            let built = Core.baseWithJson()
+            let base = built.summary
             if publishBase {
                 DispatchQueue.main.async {
                     guard generation == loadGeneration else { return }
@@ -576,11 +577,15 @@ struct RootView: View {
             #if TORCH
             if base.error == nil {
                 let full = Core.withModels(base, previous: previous, progress: progress)
+                HubPusher.shared.schedule(rawJson: built.json, models: full, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: full) }
             } else {
                 DispatchQueue.main.async { finishLoad(generation, summary: nil) }
             }
             #else
+            if base.error == nil {
+                HubPusher.shared.schedule(rawJson: built.json, models: previous ?? base, reason: "foreground")
+            }
             DispatchQueue.main.async { finishLoad(generation, summary: nil) }
             #endif
         }

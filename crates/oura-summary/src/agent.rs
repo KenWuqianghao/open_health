@@ -14,7 +14,7 @@ use crate::civil;
 pub const TREND_METRICS: &[(&str, &str)] = &[
     ("hrv_ms", "ms"),
     ("rhr", "bpm"),
-    ("skin_temp", "deg_c_deviation"),
+    ("skin_temp", "deg_c"),
     ("efficiency", "pct"),
     ("in_bed_h", "h"),
     ("asleep_min", "min"),
@@ -63,7 +63,7 @@ fn night_compact(n: &Value) -> Value {
         "wake_pct": n["wake_pct"],
         "hrv_ms": n["hrv_ms"],
         "rhr": n["rhr"],
-        "skin_temp_deviation_c": n["skin_temp"],
+        "skin_temp_c": n["skin_temp"],
         "sleep_onset_min": m["sol_min"],
         "waso_min": m["waso_min"],
         "awakenings": m["awakenings"],

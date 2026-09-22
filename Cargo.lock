@@ -181,6 +181,7 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -196,6 +197,7 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower",
@@ -1412,7 +1414,6 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oura-analysis"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "oura-protocol",
  "serde",
@@ -1482,8 +1483,11 @@ dependencies = [
  "axum",
  "hex",
  "http-body-util",
+ "oura-protocol",
+ "oura-store",
  "oura-summary",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
@@ -1495,7 +1499,6 @@ dependencies = [
 [[package]]
 name = "oura-link"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "async-trait",
  "btleplug",
@@ -1511,7 +1514,6 @@ dependencies = [
 [[package]]
 name = "oura-protocol"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "aes",
  "hex",
@@ -1523,10 +1525,11 @@ dependencies = [
 [[package]]
 name = "oura-store"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
+ "hex",
  "oura-protocol",
  "rusqlite",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
 ]
@@ -1825,6 +1828,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "safetensors"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1943,6 +1952,18 @@ dependencies = [
  "itoa",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "serde_urlencoded"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
+dependencies = [
+ "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde",
 ]
 
 [[package]]

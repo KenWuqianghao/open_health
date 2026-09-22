@@ -29,6 +29,10 @@ a sync alive, when the app syncs, what the user must do, and what iOS does not a
 After each run the app submits both scheduled tasks again. The sync cursor is
 saved after every batch, so a run that stops early loses nothing.
 
+After the summary is rebuilt, the app pushes it and the new ring rows to the
+health hub when one is set up (see `health-hub.md`). A refresh run gives the push
+8 seconds; the other runs give it 40. The push cursor is saved after every page.
+
 ## The link after a sync
 
 The setting "After a sync" in the Sync screen has two values:

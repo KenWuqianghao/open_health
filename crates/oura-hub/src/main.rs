@@ -15,13 +15,18 @@ async fn main() -> Result<()> {
     }
     let bind = std::env::var("OURA_HUB_BIND").unwrap_or_else(|_| "0.0.0.0:8787".into());
     let db = PathBuf::from(std::env::var("OURA_HUB_DB").unwrap_or_else(|_| "hub.db".into()));
+    // The ring replica sits next to the snapshot file unless told otherwise.
+    let ring_db = std::env::var("OURA_HUB_RING_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| db.with_file_name("oura.db"));
 
     let store = Store::open(&db)?;
-    let state = oura_hub::app_state(store, token);
+    let ring = oura_store::Store::open(&ring_db).with_context(|| format!("opening ring replica {}", ring_db.display()))?;
+    let state = oura_hub::app_state(store, ring, token);
     let app = oura_hub::router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("binding {bind}"))?;
-    tracing::info!("oura-hub listening on {bind}, db {}", db.display());
+    tracing::info!("oura-hub listening on {bind}, snapshots {}, ring replica {}", db.display(), ring_db.display());
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

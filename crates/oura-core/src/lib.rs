@@ -109,6 +109,19 @@ pub fn health_samples_json(db_path: String, tz_offset_s: i64, since_unix: Option
     }
 }
 
+/// Raw rows after the given ids, for replication to an always-on hub:
+/// `{ schema_version, devices, events, readings, next_event_id, next_reading_id, more }`
+/// (see `oura_store::replication`), or `{ "error": "…" }`.
+#[uniffi::export]
+pub fn export_batch_json(db_path: String, after_event_id: i64, after_reading_id: i64, limit: u32) -> String {
+    match oura_store::storage::Store::open(&db_path)
+        .and_then(|s| s.export_after(after_event_id, after_reading_id, limit as usize))
+    {
+        Ok(batch) => serde_json::to_string(&batch).unwrap_or_else(|e| json!({ "error": e.to_string() }).to_string()),
+        Err(e) => json!({ "error": e.to_string() }).to_string(),
+    }
+}
+
 /// The store's `PRAGMA user_version` (migrating an older file in place), or -1
 /// when the file cannot be opened — including when it is NEWER than this build.
 #[uniffi::export]

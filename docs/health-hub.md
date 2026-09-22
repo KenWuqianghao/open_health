@@ -1,18 +1,26 @@
 # Health hub: an always-on MCP endpoint for your health data
 
 The hub is a small server that runs 24 hours a day on a home server or a rented
-VPS. Clients push the health summary to it. Agents (Grok Bot, Claude Code, any MCP
-client) read the summary from it over MCP. Your Mac and your phone can be off.
+VPS. Clients push two things to it:
 
-The hub does not talk to the ring. It stores what a client pushed, and it serves
-that. This keeps the ring's single Bluetooth link with the client that syncs it.
+1. **The health summary** (`build_summary` JSON). Agents (Grok Bot, Claude Code, any
+   MCP client) read it over MCP.
+2. **The raw ring rows** (events, readings, device rows). The hub keeps them in its
+   own `oura.db` with the `oura-store` schema. This is the backup: every report the
+   phone or the desktop can run also runs on the hub's file.
+
+Your Mac and your phone can be off. The hub does not talk to the ring. It stores
+what a client pushed, and it serves that. This keeps the ring's single Bluetooth
+link with the client that syncs it.
 
 ## Parts
 
 | Part | Where | Job |
 | --- | --- | --- |
-| `oura-hub` | `crates/oura-hub` | HTTP server: `/ingest/summary`, `/mcp`, `/health` |
+| `oura-hub` | `crates/oura-hub` | HTTP server: `/ingest/summary`, `/ingest/events`, `/export/events`, `/mcp`, `/health` |
 | `oura-summary::agent` | `crates/oura-summary/src/agent.rs` | Turns the full summary into the short documents the tools return |
+| `oura-store::replication` | open_oura | `export_after` / `import_batch`: raw rows in pages, idempotent |
+| iOS `HubPush.swift` | `apps/ios/OuraApp` | Pushes the summary and the new rows after each sync |
 | `oura push` | `crates/oura-cli` | Builds the summary on the Mac and pushes it |
 
 ## Run the hub
@@ -41,7 +49,8 @@ Environment:
 | --- | --- | --- |
 | `OURA_HUB_TOKEN` | required | Bearer token for pushes and for MCP |
 | `OURA_HUB_BIND` | `0.0.0.0:8787` | Listen address |
-| `OURA_HUB_DB` | `hub.db` | SQLite file for the snapshots |
+| `OURA_HUB_DB` | `hub.db` | SQLite file for the summary snapshots |
+| `OURA_HUB_RING_DB` | `oura.db` next to `OURA_HUB_DB` | The ring replica (`oura-store` schema) |
 | `RUST_LOG` | `info` | Log filter |
 
 Check it:
@@ -66,7 +75,24 @@ hub.example.com {
 }
 ```
 
-## Push the summary
+## Push from the iPhone
+
+Open Settings in the app. Under **Health hub** turn on **Send data to my hub**, enter
+the hub URL and the token. After every sync the app sends:
+
+- the summary, with the on-device model results folded in (sleep stages, cardio
+  age, illness signs), and
+- every ring row the hub does not have yet, in pages of 1000. The app remembers the
+  last accepted ids, so a push that stops early loses nothing.
+
+A background refresh has about 22 seconds. The push uses at most 8 of them. What
+did not fit goes out on the next sync or the next app open. **Send Now** sends at
+once. **Send All Ring Data Again** resets the ids, for a new hub.
+
+The token is kept in the Keychain and is readable after the first unlock, so a
+background sync on a locked phone can push.
+
+## Push from the Mac
 
 From the Mac that has `oura.db`:
 
@@ -84,6 +110,21 @@ The reply shows what the hub stored:
 ```json
 { "stored": true, "generated_at": 1758500000.0, "received_at": 1758500012, "snapshots": 12 }
 ```
+
+## The ring replica
+
+`POST /ingest/events` takes an `oura-store::replication::ExportBatch` and imports it
+into the hub's `oura.db`. Rows the hub already holds are ignored. `GET
+/export/events?after_event_id=0&after_reading_id=0&limit=2000` (Bearer) gives the
+rows back in pages, to restore a phone or a desktop.
+
+The replica is a normal store. On the server:
+
+```bash
+oura dashboard --db /data/oura.db
+```
+
+`GET /health` shows `ring.max_event_id`; compare it with the app's "through id".
 
 ## Connect an agent over MCP
 
@@ -141,6 +182,6 @@ Give the agent a daily trigger and a prompt like this:
 
 ## Next steps
 
-1. The iOS app pushes the summary itself, so the Mac is not needed.
-2. The iOS app reads Apple Watch samples from HealthKit and adds them to the push.
-3. HealthKit background delivery pushes within minutes of new Watch data.
+1. The iOS app reads Apple Watch samples from HealthKit and adds them to the push.
+2. HealthKit background delivery pushes within minutes of new Watch data.
+3. The hub builds the summary from its own replica when no summary was pushed.

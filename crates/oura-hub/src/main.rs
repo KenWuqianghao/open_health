@@ -29,7 +29,13 @@ async fn main() -> Result<()> {
     tracing::info!("oura-hub listening on {bind}, snapshots {}, ring replica {}", db.display(), ring_db.display());
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+            // podman and docker stop with SIGTERM; a terminal sends SIGINT.
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
         })
         .await?;
     Ok(())

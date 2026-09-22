@@ -80,7 +80,13 @@ enum SleepStaging {
             // Empty stages are cached too: a night the model can't stage shouldn't
             // be retried on every reload until its inputs change.
             let stages = stageNight(night.inputs, modelPath: modelPath) ?? []
-            if !stages.isEmpty { result[night.key] = stages }
+            if stages.isEmpty {
+                let why = String(cString: oura_torch_last_error())
+                dlog("models", "staging night \(night.key): no stages — beats=\(night.inputs.beats.count) acm=\(night.inputs.acm.count) temp=\(night.inputs.temp.count)\(why.isEmpty ? "" : "; \(why)")")
+            } else {
+                dlog("models", "staging night \(night.key): \(stages.count) epochs")
+                result[night.key] = stages
+            }
             cache[night.key] = StagedNightEntry(fp: night.fp, stages: stages)
             ModelCacheStore.save(ModelCacheStore.stagingFile, globalKey: globalKey, entries: cache)
         }

@@ -14,6 +14,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// The message of the last failure in any bridge call (empty when none). Read it
+// right after a call returns -1; the app transcript shows it next to the night.
+const char *oura_torch_last_error(void);
+
 int oura_sleepnet(const char *model_path,
                   const int64_t *ibi_ts, const float *ibi_val, int n_ibi,
                   const int64_t *acm_ts, const float *acm_val, int n_acm,

@@ -20,7 +20,7 @@ strip = true
 
 # Local iteration against the sibling open_oura checkout. Remove before release and
 # bump the `rev` pins in crates/*/Cargo.toml instead.
-[patch."https://github.com/Th0rgal/open_oura"]
+[patch."https://github.com/KenWuqianghao/open_oura"]
 oura-protocol = { path = "../open_oura/crates/oura-protocol" }
 oura-link     = { path = "../open_oura/crates/oura-link" }
 oura-analysis = { path = "../open_oura/crates/oura-analysis" }

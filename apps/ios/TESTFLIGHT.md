@@ -6,7 +6,10 @@ signing requires *your* Apple Developer account.
 
 ## One-time
 - **Apple Developer Program** membership ($99/yr).
-- Register the App ID **`md.thomas.openoura`** and create the app in App Store Connect.
+- Register an App ID you own (the upstream project uses `md.thomas.openoura`; a fork
+  needs its own, for example `com.yourname.openoura`) and create the app in App Store
+  Connect. Pass it as `PRODUCT_BUNDLE_IDENTIFIER=…` on the `xcodebuild` line or set it in
+  Xcode; see `README.md` in this directory.
 - Install xcodegen: `brew install xcodegen`.
 
 ## Build & upload

@@ -4,28 +4,13 @@ A native iOS client to the same local Rust core as the web dashboard. Same data,
 same numbers — a **calm, instrument-grade** reading of your ring, with a quiet
 data-science aesthetic. Everything on-device; nothing leaves the phone.
 
-## Design language — thomas.md Quiet Ink
+## Design language — the Apple Health style
 
-Same paper and ink as [thomas.md](https://thomas.md). A personal health readout
-on warm paper, not a teal glass dashboard.
-
-- **Paper** `#fbfaf6` light · `#131110` dark. Hierarchy from hairlines and weight,
-  not glass or aurora.
-- **Ink** headings `#26231e` / `#efebe2` · body `#57534b` / `#cfc9bf` · muted
-  `#6e695f` / `#a8a195` · links `#2e2b26` / `#e3ddd2` · rules `#e7e3da` / `#2c2925`.
-- **Color is semantic.** Charts and numbers sit in warm ink/gray. Green only
-  when something is genuinely good, orange/red only when there is a problem.
-  Sleep stages are the exception: deep / light / REM / wake keep distinct hues.
-- **Type** New York (system serif) for titles, SF Pro for UI, **SF Mono** for
-  every number, axis and tag.
-- **Surfaces** paper + 1px rules, 10pt radius. No ultraThinMaterial, no teal.
-- Auto light/dark from the system. Respects Reduce Motion / Dynamic Type.
-
-### Signature element — "Night Orbit"
-One reusable radial view: concentric **dashed baseline rings**, a **growing trace**
-for the selected signal across the night, ringed **event nodes**, a faint sweep
-hand. Powers the hero on Today, the hypnogram on Sleep, and the actogram on
-Activity — one visual idea, three uses.
+The app reads like the Apple Health app: a grouped background, cards with a colored
+category label, big rounded numbers, one accent color per metric, Swift Charts. Every
+color is a system semantic color and every font a text style, so Dark Mode, Increase
+Contrast, Dynamic Type, and the iOS 26 chrome come for free. The tokens live in
+`Theme.swift`, the shared views in `Components.swift`.
 
 ## Feature parity with the web dashboard
 

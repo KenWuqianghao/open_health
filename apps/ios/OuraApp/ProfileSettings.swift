@@ -239,6 +239,8 @@ struct ProfileSettingsView: View {
                                 }
                             }
                         if let removeMessage { Text(removeMessage).font(.footnote).foregroundStyle(Obs.ink2) }
+                    } else if let e = health.status.lastError {
+                        Text("error: \(e)").font(.footnote).foregroundStyle(Obs.bad)
                     }
                 } header: {
                     Text("Apple Health")

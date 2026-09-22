@@ -387,16 +387,20 @@ final class HealthExporter: ObservableObject {
         }
         guard isAvailable else {
             status.lastError = "Apple Health is unavailable on this device."
+            dlog("health", "enable refused: Apple Health unavailable")
             return
         }
         do {
             try await engine.requestAuthorization()
         } catch {
             status.lastError = error.localizedDescription
+            dlog("health", "enable failed: authorization error — \(error.localizedDescription)")
             return
         }
+        status.lastError = nil
         enabled = true
         UserDefaults.standard.set(true, forKey: Self.enabledKey)
+        dlog("health", "export enabled")
         await run(.enabled)
     }
 

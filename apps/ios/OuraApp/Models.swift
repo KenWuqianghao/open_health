@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // ── the shared build_summary() JSON, decoded (same contract as the web client) ──
 // SIBLING CLIENT: the web dashboard (dashboard/web/app.js) renders the SAME summary
@@ -193,17 +194,42 @@ enum VitalKind: String, Identifiable, CaseIterable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .hrv: return "nightly hrv"
-        case .heartRate: return "heart rate"
-        case .temp: return "skin temp"
-        case .oxygen: return "blood o₂"
+        case .hrv: return "HRV"
+        case .heartRate: return "Heart Rate"
+        case .temp: return "Skin Temperature"
+        case .oxygen: return "Blood Oxygen"
+        }
+    }
+    /// Fits the half-width Summary card on one line.
+    var shortTitle: String {
+        switch self {
+        case .hrv: return "HRV"
+        case .heartRate: return "Heart Rate"
+        case .temp: return "Skin Temp"
+        case .oxygen: return "Blood O₂"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .hrv: return "waveform.path.ecg"
+        case .heartRate: return "heart.fill"
+        case .temp: return "thermometer.medium"
+        case .oxygen: return "lungs.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .hrv: return Theme.hrv
+        case .heartRate: return Theme.heart
+        case .temp: return Theme.temperature
+        case .oxygen: return Theme.oxygen
         }
     }
     var unit: String {
         switch self {
         case .hrv: return "ms"
         case .heartRate: return "bpm"
-        case .temp: return "°c"
+        case .temp: return "°C"
         case .oxygen: return "%"
         }
     }
@@ -242,7 +268,15 @@ enum VitalKind: String, Identifiable, CaseIterable {
 }
 
 // selects which day + which tab the full-page report opens on.
-struct ReportSel: Identifiable { let day: String; let sleep: Bool; var id: String { day + (sleep ? "-s" : "-a") } }
+struct ReportSel: Identifiable, Hashable { let day: String; let sleep: Bool; var id: String { day + (sleep ? "-s" : "-a") } }
+
+// Navigation destinations pushed from the Summary screen.
+enum Route: Hashable {
+    case report(ReportSel)
+    case vital(VitalKind)
+    case allDays
+    case sleepDebt
+}
 
 // A calendar-day activity profile is convenient for storage, but people experience
 // activity between waking and going back to bed. This view model joins the tail of

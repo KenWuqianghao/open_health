@@ -126,6 +126,19 @@ struct ProfileSettingsView: View {
         dlog("pair", "ring forgotten")
     }
 
+    /// A labelled numeric row: label leading, the value trailing, like the Settings app.
+    private func numberField(_ label: String, value: Binding<Double>, unit: String) -> some View {
+        LabeledContent(label) {
+            HStack(spacing: 4) {
+                TextField(label, value: value, format: .number.precision(.fractionLength(0...1)))
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 120)
+                if !unit.isEmpty { Text(unit).foregroundStyle(.secondary) }
+            }
+        }
+    }
+
     init(profile: Profile?, onSaved: @escaping () -> Void) {
         _profile = State(initialValue: EditableProfile(profile))
         self.onSaved = onSaved
@@ -140,14 +153,10 @@ struct ProfileSettingsView: View {
                         Text("Male").tag("M")
                         Text("Other").tag("O")
                     }
-                    TextField("Age", value: $profile.age, format: .number.precision(.fractionLength(0...1)))
-                        .keyboardType(.decimalPad)
-                    TextField("Height (cm)", value: $profile.heightCm, format: .number.precision(.fractionLength(0...1)))
-                        .keyboardType(.decimalPad)
-                    TextField("Weight (kg)", value: $profile.weightKg, format: .number.precision(.fractionLength(0...1)))
-                        .keyboardType(.decimalPad)
-                    TextField("Ring size", value: $profile.ringSize, format: .number.precision(.fractionLength(0...1)))
-                        .keyboardType(.decimalPad)
+                    numberField("Age", value: $profile.age, unit: "yr")
+                    numberField("Height", value: $profile.heightCm, unit: "cm")
+                    numberField("Weight", value: $profile.weightKg, unit: "kg")
+                    numberField("Ring size", value: $profile.ringSize, unit: "")
                 } header: {
                     Text("Your data")
                 } footer: {
@@ -177,7 +186,7 @@ struct ProfileSettingsView: View {
                         }
                     }
                     .disabled(importing)
-                    if let message { Text(message).font(.footnote).foregroundStyle(Obs.ink2) }
+                    if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
 
                 Section {
@@ -186,24 +195,24 @@ struct ProfileSettingsView: View {
                         LabeledContent("Model", value: paired.hardwareId ?? "—")
                         LabeledContent("Firmware", value: paired.firmware ?? "—")
                         LabeledContent("Last sync", value: ring.lastSuccessfulSyncAt.map { Self.when.string(from: $0) } ?? "—")
-                        Button("Pair a different ring") { showPairing = true }
+                        Button { showPairing = true } label: { Label("Pair a Different Ring", systemImage: "plus.circle") }
                         Button {
                             revealKey.toggle()
                         } label: {
                             Label(revealKey ? "Hide auth key" : "Show auth key", systemImage: "key")
                         }
                         if revealKey, let key = Keychain.loadKey() {
-                            Text(key).font(Obs.mono(12)).textSelection(.enabled)
-                            Button("Copy key") { UIPasteboard.general.string = key }
+                            Text(key).font(Theme.mono(.footnote)).textSelection(.enabled)
+                            Button { UIPasteboard.general.string = key } label: { Label("Copy Key", systemImage: "doc.on.doc") }
                         }
-                        Button("Forget ring", role: .destructive) { confirmForget = true }
+                        Button("Forget Ring", role: .destructive) { confirmForget = true }
                             .confirmationDialog("Forget this ring?", isPresented: $confirmForget) {
-                                Button("Forget ring", role: .destructive) { forgetRing() }
+                                Button("Forget Ring", role: .destructive) { forgetRing() }
                             } message: {
                                 Text("The key is deleted from this iPhone. Pairing again needs a factory reset of the ring. Synced data and Apple Health samples are kept.")
                             }
                     } else {
-                        Button("Pair a ring") { showPairing = true }
+                        Button { showPairing = true } label: { Label("Pair a Ring", systemImage: "plus.circle") }
                     }
                 } header: {
                     Text("Ring")
@@ -220,27 +229,29 @@ struct ProfileSettingsView: View {
                         Toggle("Include resting energy (estimate)", isOn: $health.includeBasal)
                         DisclosureGroup("What is exported") {
                             Text("Sleep: in-bed time, and sleep stages when the on-device models are available.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts when the on-device models detect them.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
-                                .font(.footnote).foregroundStyle(Obs.ink2)
+                                .font(.footnote).foregroundStyle(.secondary)
                         }
-                        HStack {
-                            Text(health.status.running ? (health.status.progress.isEmpty ? "exporting…" : health.status.progress) : "Export now")
-                            Spacer()
-                            if health.status.running { ProgressView() }
+                        Button { health.schedule(.manual(full: false)) } label: {
+                            HStack {
+                                Label(health.status.running ? (health.status.progress.isEmpty ? "Exporting…" : health.status.progress) : "Export Now",
+                                      systemImage: "square.and.arrow.up")
+                                Spacer()
+                                if health.status.running { ProgressView() }
+                            }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { if !health.status.running { health.schedule(.manual(full: false)) } }
-                        Button("Export everything again") { health.schedule(.manual(full: true)) }
+                        .disabled(health.status.running)
+                        Button { health.schedule(.manual(full: true)) } label: { Label("Export Everything Again", systemImage: "arrow.counterclockwise") }
                             .disabled(health.status.running)
-                        Text(healthStatusLine).font(.footnote).foregroundStyle(health.status.lastError == nil ? Obs.ink2 : Obs.bad)
-                        Button("Remove Open Oura data from Health", role: .destructive) { confirmRemove = true }
+                        Text(healthStatusLine).font(.footnote).foregroundStyle(health.status.lastError == nil ? Color.secondary : Theme.alert)
+                        Button("Remove Open Oura Data from Health", role: .destructive) { confirmRemove = true }
                             .confirmationDialog("Remove all Open Oura samples from Apple Health?", isPresented: $confirmRemove) {
                                 Button("Remove", role: .destructive) {
                                     Task { removeMessage = await health.removeAllExportedData() }
                                 }
                             }
-                        if let removeMessage { Text(removeMessage).font(.footnote).foregroundStyle(Obs.ink2) }
+                        if let removeMessage { Text(removeMessage).font(.footnote).foregroundStyle(.secondary) }
                     } else if let e = health.status.lastError {
-                        Text("error: \(e)").font(.footnote).foregroundStyle(Obs.bad)
+                        Label(e, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(Theme.alert)
                     }
                 } header: {
                     Text("Apple Health")
@@ -248,10 +259,8 @@ struct ProfileSettingsView: View {
                     Text("Only measured data is written, never scores. Every day is rewritten in place, so re-running never duplicates. Data stays on this iPhone.")
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Obs.canvas.ignoresSafeArea())
             .fullScreenCover(isPresented: $showPairing) { PairingView(onPaired: { _ in }) }
-            .navigationTitle("profile")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

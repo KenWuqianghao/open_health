@@ -1,135 +1,146 @@
 import SwiftUI
-import UIKit
 
-// thomas.md Quiet Ink: warm paper, serif titles, sans UI, mono numbers.
-// Color is semantic, not decorative: gray when nothing is going on, green when
-// something is genuinely good, orange/red when there is a problem.
+// The design tokens. Every color is a system semantic color and every font is a
+// text style, so the app follows Dark Mode, Increase Contrast, Dynamic Type, and the
+// Liquid Glass chrome on iOS 26 without extra code. The visual model is the Apple
+// Health app: a grouped background, cards with a colored category label, big rounded
+// numbers, and one accent color per metric.
 
-enum Obs {
-    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
-        Color(uiColor: UIColor { trait in
-            let hex = trait.userInterfaceStyle == .dark ? dark : light
-            return UIColor(
-                red: CGFloat((hex >> 16) & 0xff) / 255,
-                green: CGFloat((hex >> 8) & 0xff) / 255,
-                blue: CGFloat(hex & 0xff) / 255,
-                alpha: 1)
-        })
-    }
+enum Theme {
+    // ── metric accents (the Apple Health category hues) ──────────────────────
+    static let sleep = Color.indigo
+    static let activity = Color.orange
+    static let heart = Color.red
+    static let hrv = Color.mint
+    static let temperature = Color.purple
+    static let oxygen = Color.cyan
+    static let cardio = Color.pink
+    static let device = Color.gray
 
-    // Paper / ink — same values as thomas.md.
-    static let paper = adaptive(light: 0xfbfaf6, dark: 0x131110)
-    static let ink = adaptive(light: 0x26231e, dark: 0xefebe2)
-    static let ink2 = adaptive(light: 0x57534b, dark: 0xcfc9bf)
-    static let muted = adaptive(light: 0x6e695f, dark: 0xa8a195)
-    static let link = adaptive(light: 0x2e2b26, dark: 0xe3ddd2)
-    static let rule = adaptive(light: 0xe7e3da, dark: 0x2c2925)
+    // ── status ───────────────────────────────────────────────────────────────
+    static let good = Color.green
+    static let caution = Color.orange
+    static let alert = Color.red
 
-    // Diagrams sit in the same ink family. Status uses the investing-post green/orange.
-    static let chart = adaptive(light: 0x6e695f, dark: 0xa8a195)
-    static let good = adaptive(light: 0x1baf7a, dark: 0x2ec48c)
-    static let bad = adaptive(light: 0xeb6834, dark: 0xe07a4a)
-    static let alert = adaptive(light: 0xc4472c, dark: 0xe06a4f)
-
-    // Back-compat names. `teal` is the quiet chart color; `yellow` is a problem.
-    static var teal: Color { chart }
-    static var yellow: Color { bad }
-    static var warn: Color { bad }
-    static var black: Color { paper }
-    static var base: Color { paper }
-    static var baseLow: Color { paper }
-    static var trace: Color { rule }
-
-    static var canvas: some View { paper.ignoresSafeArea() }
-
-    // Sleep stages keep distinct hues (deep / light / REM / wake). Other charts
-    // stay gray unless a value is actually good or a problem.
-    static let deep = adaptive(light: 0x104281, dark: 0x5598e7)
-    static let light = adaptive(light: 0x6da7ec, dark: 0x9ec5f4)
-    static let rem = adaptive(light: 0x1baf7a, dark: 0x2ec48c)
-    static let wake = adaptive(light: 0xeda100, dark: 0xeda100)
+    // ── sleep stages (the Health app hypnogram palette) ──────────────────────
+    static let deep = Color.indigo
+    static let light = Color.blue
+    static let rem = Color.cyan
+    static let awake = Color.orange
     static func stage(_ s: Int) -> Color {
-        switch s { case 1: return deep; case 2: return light; case 3: return rem; default: return wake }
+        switch s { case 1: return deep; case 2: return light; case 3: return rem; default: return awake }
+    }
+    static func stageName(_ s: Int) -> String {
+        switch s { case 1: return "Deep"; case 2: return "Core"; case 3: return "REM"; default: return "Awake" }
     }
 
-    /// Color a delta only when it is large enough to be worth noticing.
+    /// Color a change only when it is large enough to matter. Small moves stay gray.
     static func tone(delta: Double?, goodWhenPositive: Bool = true, threshold: Double = 8) -> Color {
-        guard let d = delta else { return chart }
+        guard let d = delta, abs(d) >= threshold else { return .secondary }
         let isGood = d >= 0 ? goodWhenPositive : !goodWhenPositive
-        if abs(d) < threshold { return chart }
-        return isGood ? good : bad
+        return isGood ? good : alert
     }
 
     static func debt(_ state: String) -> Color {
         switch state {
         case "none": return good
-        case "low": return chart
-        case "moderate": return bad
+        case "low": return sleep
+        case "moderate": return caution
         case "high": return alert
-        default: return chart
+        default: return .secondary
         }
     }
 
-    static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+    // ── shape ────────────────────────────────────────────────────────────────
+    static let cardRadius: CGFloat = 20
+    static let cardPadding: CGFloat = 16
+    static let gutter: CGFloat = 16
+
+    // ── type ─────────────────────────────────────────────────────────────────
+    /// The big number in a card: rounded, semibold, tabular digits.
+    static func number(_ style: Font.TextStyle = .title) -> Font {
+        .system(style, design: .rounded).weight(.semibold)
     }
-    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
-    }
-    static func prose(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight)
+    static func mono(_ style: Font.TextStyle = .footnote) -> Font {
+        .system(style, design: .monospaced)
     }
 }
 
-struct ObsTag: View {
-    let text: String
-    var icon: String? = nil
-    init(_ text: String, icon: String? = nil) { self.text = text; self.icon = icon }
-    var body: some View {
-        HStack(spacing: 7) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Obs.muted)
-            }
-            Text(text.uppercased())
-                .font(Obs.mono(11, .medium))
-                .tracking(1.6)
-                .foregroundStyle(Obs.muted)
+// ── date + duration formatting ───────────────────────────────────────────────
+enum Fmt {
+    private static let ymd: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    private static let short: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEE MMM d")
+        return f
+    }()
+    private static let medium: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEEE MMMM d")
+        return f
+    }()
+    private static let monthDayFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMM d")
+        return f
+    }()
+
+    static func date(_ day: String) -> Date? { ymd.date(from: day) }
+
+    /// "Today", "Yesterday", or "Mon, Sep 22".
+    static func dayLabel(_ day: String, now: Date = Date()) -> String {
+        guard let d = date(day) else { return day }
+        let cal = Calendar.current
+        if cal.isDate(d, inSameDayAs: now) { return "Today" }
+        if let y = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(d, inSameDayAs: y) { return "Yesterday" }
+        return short.string(from: d)
+    }
+
+    /// "Monday, September 22" for page titles.
+    static func dayTitle(_ day: String) -> String {
+        guard let d = date(day) else { return day }
+        return medium.string(from: d)
+    }
+
+    private static let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    /// "Sep 22" for axes and small captions. Accepts "yyyy-MM-dd", "MM-dd", and the
+    /// summary's weekday labels ("Mon 09-07").
+    static func monthDay(_ day: String) -> String {
+        if let d = date(day) { return monthDayFmt.string(from: d) }
+        let tail = String(day.suffix(5))
+        let parts = tail.split(separator: "-").compactMap { Int($0) }
+        if parts.count == 2, (1...12).contains(parts[0]) {
+            return "\(monthNames[parts[0] - 1]) \(parts[1])"
         }
+        return day
     }
-}
 
-struct ObsCard: ViewModifier {
-    var padding: CGFloat = 18
-    var radius: CGFloat = 10
-    func body(content: Content) -> some View {
-        content
-            .padding(padding)
-            .background(Obs.paper, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(Obs.rule, lineWidth: 1)
-            )
+    /// Hours as "7 hr 41 min" parts for a big number.
+    static func hoursMinutes(_ hours: Double) -> [(String, String)] {
+        let total = max(0, Int((hours * 60).rounded()))
+        if total < 60 { return [("\(total)", "min")] }
+        return [("\(total / 60)", "hr"), ("\(total % 60)", "min")]
     }
-}
+    static func minutes(_ minutes: Double) -> [(String, String)] { hoursMinutes(minutes / 60) }
 
-extension View {
-    func obsCard(padding: CGFloat = 18, radius: CGFloat = 10) -> some View {
-        modifier(ObsCard(padding: padding, radius: radius))
+    static func minutesText(_ minutes: Double) -> String {
+        hoursMinutes(minutes / 60).map { "\($0.0) \($0.1)" }.joined(separator: " ")
     }
-}
 
-struct ObsStat: View {
-    let label: String
-    let value: String
-    var accent: Color = Obs.ink
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label).font(Obs.mono(13)).foregroundStyle(Obs.ink2)
-            Spacer(minLength: 16)
-            Text(value).font(Obs.mono(15, .medium)).foregroundStyle(accent)
-                .monospacedDigit()
-        }
+    static func number(_ v: Double?, decimals: Int = 0, fallback: String = "—") -> String {
+        guard let v, v.isFinite else { return fallback }
+        return decimals > 0 ? String(format: "%.\(decimals)f", v) : Int(v.rounded()).formatted(.number)
+    }
+
+    static func steps(_ steps: Double?) -> String {
+        guard let steps else { return "—" }
+        return Int(steps.rounded()).formatted(.number)
     }
 }

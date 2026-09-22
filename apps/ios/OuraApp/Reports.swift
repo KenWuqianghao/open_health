@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 // Full-page, research-grade sleep & activity reports — the iOS counterpart to the web
 // dashboard's `sleepReport`/`activityReport` (see docs/clients-web-and-ios.md). The raw
@@ -217,60 +218,36 @@ extension Summary {
 
 // ── research-grade primitives ────────────────────────────────────────────────
 // A section rule: a hairline with a small all-caps mono label riding it.
-struct Rule: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(text.uppercased()).font(Obs.mono(10, .medium)).tracking(2).foregroundStyle(Obs.ink2)
-            Rectangle().fill(Obs.trace.opacity(0.5)).frame(height: 0.5)
-        }
-    }
-}
-
-// A big mono datum with a tiny uppercase caption — the readout atom.
-struct Readout: View {
-    let value: String
-    let caption: String
-    var accent: Color = Obs.ink
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value).font(Obs.mono(20, .medium)).foregroundStyle(accent).monospacedDigit()
-            Text(caption.uppercased()).font(Obs.mono(9)).tracking(1.2).foregroundStyle(Obs.ink2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 // ── the polysomnograph: hypnogram + aligned signal lanes + a touch scrubber ──
 struct Polysomnograph: View {
     let night: NightRow
     @State private var cursorF: Double? = nil
-    private let gutterW: CGFloat = 76
-    private let hypH: CGFloat = 84
-    private let laneH: CGFloat = 44
-    private let axisH: CGFloat = 18
+    private let gutterW: CGFloat = 84
+    private let hypH: CGFloat = 88
+    private let laneH: CGFloat = 48
+    private let axisH: CGFloat = 20
 
-    private struct Lane { let label: String; let unit: String; let signal: SignalLane?; let stages: [Int]? }
-    private struct SignalLane { let v: [Double]; let color: Color; let dp: Int; let span: [Double] }
+    private struct Lane { let label: String; let unit: String; let signal: SignalLane?; let stages: [Int]?; let color: Color }
+    private struct SignalLane { let v: [Double]; let dp: Int; let span: [Double] }
 
     private var lanes: [Lane] {
         var out: [Lane] = []
-        if let st = night.stages, st.count > 1 { out.append(Lane(label: "Hypnogram", unit: "", signal: nil, stages: Sleep.smooth(st, 5))) }
+        if let st = night.stages, st.count > 1 {
+            out.append(Lane(label: "Stages", unit: "", signal: nil, stages: Sleep.smooth(st, 5), color: Theme.sleep))
+        }
         func sig(_ label: String, _ unit: String, _ v: [Double]?, _ color: Color,
                  _ dp: Int = 0, span: [Double]? = nil) {
             guard let v, v.count > 1 else { return }
             let coverage = span.flatMap { $0.count == 2 ? $0 : nil } ?? [0, 1]
             out.append(Lane(label: label, unit: unit,
-                            signal: SignalLane(v: v, color: color, dp: dp,
-                                               span: coverage), stages: nil))
+                            signal: SignalLane(v: v, dp: dp, span: coverage), stages: nil, color: color))
         }
         let s = night.series
-        sig("Heart rate", "bpm", s?.hr, Obs.chart)
-        sig("HRV", "ms", s?.hrv, Obs.chart)
-        sig("Blood O₂", "%", s?.spo2, Obs.chart)
-        sig("Skin temp", "°C", s?.temp, Obs.chart, 1, span: s?.temp_span)
-        sig("Motion", "s", s?.motion, Obs.chart)
+        sig("Heart rate", "bpm", s?.hr, Theme.heart)
+        sig("HRV", "ms", s?.hrv, Theme.hrv)
+        sig("Blood O₂", "%", s?.spo2, Theme.oxygen)
+        sig("Skin temp", "°C", s?.temp, Theme.temperature, 1, span: s?.temp_span)
+        sig("Motion", "s", s?.motion, Theme.activity)
         return out
     }
 
@@ -286,18 +263,18 @@ struct Polysomnograph: View {
                 VStack(spacing: 0) {
                     ForEach(lanes.indices, id: \.self) { i in
                         laneRow(lanes[i], plotW: plotW)
-                        if i < lanes.count - 1 { Rectangle().fill(Obs.trace.opacity(0.25)).frame(height: 0.5) }
+                        if i < lanes.count - 1 { Divider() }
                     }
                     axisRow(win, plotW: plotW)
                 }
                 if let f = cursorF {
-                    Rectangle().fill(Obs.ink.opacity(0.85)).frame(width: 1, height: totalH - axisH)
+                    Rectangle().fill(Color.primary.opacity(0.6)).frame(width: 1, height: totalH - axisH)
                         .offset(x: gutterW + CGFloat(f) * plotW)
                         .allowsHitTesting(false)
-                    Text(clockAt(win, f)).font(Obs.mono(10, .medium)).foregroundStyle(Obs.paper)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Obs.ink, in: RoundedRectangle(cornerRadius: 4))
-                        .offset(x: gutterW + CGFloat(f) * plotW - 18, y: -2)
+                    Text(clockAt(win, f)).font(.caption2.weight(.semibold)).monospacedDigit()
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.regularMaterial, in: Capsule())
+                        .offset(x: gutterW + CGFloat(f) * plotW - 22, y: -4)
                         .allowsHitTesting(false)
                 }
             }
@@ -307,19 +284,21 @@ struct Polysomnograph: View {
                 .onEnded { _ in cursorF = nil })
         }
         .frame(height: totalH)
+        .accessibilityLabel("Overnight signals. Drag to read values at a time of night.")
     }
 
     @ViewBuilder private func laneRow(_ lane: Lane, plotW: CGFloat) -> some View {
         let h = lane.stages != nil ? hypH : laneH
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(lane.label).font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-                Text(gutterValue(lane)).font(Obs.mono(12, .medium)).foregroundStyle(Obs.ink).monospacedDigit()
+                Text(lane.label).font(.caption).foregroundStyle(.secondary)
+                Text(gutterValue(lane)).font(.footnote.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(lane.color)
             }
             .frame(width: gutterW, alignment: .leading)
             Group {
                 if let st = lane.stages { HypnoCanvas(stages: st) }
-                else if let s = lane.signal { SignalCanvas(v: s.v, color: s.color, span: s.span) }
+                else if let s = lane.signal { SignalCanvas(v: s.v, color: lane.color, span: s.span) }
             }
             .frame(width: plotW, height: h)
         }
@@ -330,7 +309,7 @@ struct Polysomnograph: View {
         if let st = lane.stages {
             guard let f = cursorF else { return "" }
             let code = st[min(st.count - 1, max(0, Int(f * Double(st.count - 1))))]
-            return stageName(code)
+            return Theme.stageName(code)
         }
         guard let s = lane.signal else { return "" }
         let fmt = { (x: Double) in s.dp > 0 ? String(format: "%.\(s.dp)f", x) : String(Int(x.rounded())) }
@@ -350,8 +329,8 @@ struct Polysomnograph: View {
             GeometryReader { g in
                 ForEach(hourTicks(win), id: \.self) { t in
                     Text(String(format: "%02d", (t % 1440) / 60))
-                        .font(Obs.mono(9)).foregroundStyle(Obs.ink2)
-                        .position(x: CGFloat(Double(t - win.a) / Double(win.span)) * g.size.width, y: 8)
+                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                        .position(x: CGFloat(Double(t - win.a) / Double(win.span)) * g.size.width, y: 10)
                 }
             }.frame(width: plotW, height: axisH)
         }
@@ -373,7 +352,7 @@ private struct HypnoCanvas: View {
             for l in 0..<4 {
                 let y = yOf(CGFloat(l))
                 ctx.stroke(Path { $0.move(to: CGPoint(x: 0, y: y)); $0.addLine(to: CGPoint(x: size.width, y: y)) },
-                           with: .color(Obs.trace.opacity(0.25)), lineWidth: 0.5)
+                           with: .color(.secondary.opacity(0.15)), lineWidth: 0.5)
             }
             var i = 0; var prev: CGFloat? = nil
             while i < n {
@@ -382,10 +361,10 @@ private struct HypnoCanvas: View {
                 let x1 = xOf(i), x2 = xOf(min(j, n - 1)), y = yOf(lvl(code))
                 if let p = prev {
                     ctx.stroke(Path { $0.move(to: CGPoint(x: x1, y: p)); $0.addLine(to: CGPoint(x: x1, y: y)) },
-                               with: .color(Obs.trace.opacity(0.6)), lineWidth: 0.8)
+                               with: .color(.secondary.opacity(0.35)), lineWidth: 0.8)
                 }
-                ctx.stroke(Path { $0.move(to: CGPoint(x: x1, y: y)); $0.addLine(to: CGPoint(x: x2, y: y)) },
-                           with: .color(Obs.stage(code)), lineWidth: 2.2)
+                let bar = CGRect(x: x1, y: y - 3, width: max(1, x2 - x1), height: 6)
+                ctx.fill(Path(roundedRect: bar, cornerRadius: 3), with: .color(Theme.stage(code)))
                 prev = y; i = j
             }
         }
@@ -409,29 +388,32 @@ private struct SignalCanvas: View {
             var line = Path(); line.move(to: pt(0)); for i in 1..<v.count { line.addLine(to: pt(i)) }
             let x0 = size.width * CGFloat(span[0]), x1 = size.width * CGFloat(span[1])
             var area = line; area.addLine(to: CGPoint(x: x1, y: size.height)); area.addLine(to: CGPoint(x: x0, y: size.height)); area.closeSubpath()
-            ctx.fill(area, with: .color(color.opacity(0.10)))
+            ctx.fill(area, with: .color(color.opacity(0.12)))
             let mean = v.reduce(0, +) / Double(v.count)
             let my = pad + (1 - CGFloat((mean - lo) / rng)) * (size.height - 2 * pad)
             ctx.stroke(Path { $0.move(to: CGPoint(x: x0, y: my)); $0.addLine(to: CGPoint(x: x1, y: my)) },
                        with: .color(color.opacity(0.4)), style: StrokeStyle(lineWidth: 0.6, dash: [3, 3]))
-            ctx.stroke(line, with: .color(color), lineWidth: 1.3)
+            ctx.stroke(line, with: .color(color), lineWidth: 1.5)
         }
     }
 }
 
-// stage-proportion bar (Deep/Light/REM/Awake)
+// stage-proportion bar (Deep/Core/REM/Awake)
 private struct StageBar: View {
     let n: NightRow
     var body: some View {
         GeometryReader { geo in
-            HStack(spacing: 0) {
+            HStack(spacing: 2) {
                 ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
-                    Rectangle().fill(Obs.stage(code)).frame(width: geo.size.width * CGFloat((pct ?? 0) / 100))
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Theme.stage(code))
+                        .frame(width: max(0, geo.size.width * CGFloat((pct ?? 0) / 100) - 2))
                 }
                 Spacer(minLength: 0)
             }
         }
-        .frame(height: 10).clipShape(RoundedRectangle(cornerRadius: 3))
+        .frame(height: 12)
+        .accessibilityHidden(true)
     }
 }
 
@@ -450,12 +432,6 @@ private func hourTicks(_ win: (a: Int, b: Int, span: Int)) -> [Int] {
     while t <= win.b { out.append(t); t += 60 }
     return out
 }
-private func stageName(_ c: Int) -> String { switch c { case 1: return "Deep"; case 2: return "Light"; case 3: return "REM"; default: return "Awake" } }
-
-private func debtDuration(_ minutes: Double) -> String {
-    let m = max(0, Int(minutes.rounded()))
-    return m >= 60 ? "\(m / 60)h \(m % 60)m" : "\(m)m"
-}
 
 private func debtStateCopy(_ state: String) -> String {
     switch state {
@@ -466,49 +442,55 @@ private func debtStateCopy(_ state: String) -> String {
     }
 }
 
-struct SleepDebtCard: View {
-    let debt: SleepDebtSummary
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    ObsTag("sleep debt", icon: "moon.zzz.fill")
-                    Spacer()
-                    Text("past \(debt.window_days) days").font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-                    Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(Obs.trace)
-                }
-                if debt.valid {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(debtDuration(debt.debt_min)).font(Obs.mono(26, .medium)).foregroundStyle(Obs.debt(debt.state))
-                        Text(debt.state).font(Obs.mono(11, .medium)).foregroundStyle(Obs.debt(debt.state)).textCase(.uppercase)
-                    }
-                    Text(debtStateCopy(debt.state)).font(Obs.prose(14)).foregroundStyle(Obs.ink2)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("\(debt.valid_days) of 5 days available").font(Obs.mono(18, .medium)).foregroundStyle(Obs.ink)
-                    Text("5 days of sleep data are needed within the past 2 weeks.")
-                        .font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).obsCard()
+private func debtStateLabel(_ state: String) -> String {
+    switch state {
+    case "high": return "High"
+    case "moderate": return "Moderate"
+    case "low": return "Low"
+    default: return "None"
     }
 }
 
-// Symptom Radar — on-device illness detection. A radar blip for the traffic-light
-// status, then each biomarker plotted against its personal baseline band so you see
-// at a glance how far breathing / lowest HR / HRV / temperature sit from normal.
+struct SleepDebtCard: View {
+    let debt: SleepDebtSummary
+    var body: some View {
+        NavigationLink(value: Route.sleepDebt) {
+            VStack(alignment: .leading, spacing: 10) {
+                CardHeader(title: "Sleep Debt", icon: "moon.zzz.fill", tint: Theme.sleep,
+                           detail: "Past \(debt.window_days) days", chevron: true)
+                if debt.valid {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        BigValue(parts: Fmt.minutes(debt.debt_min), color: Theme.debt(debt.state))
+                        Text(debtStateLabel(debt.state))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.debt(debt.state))
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Theme.debt(debt.state).opacity(0.14), in: Capsule())
+                    }
+                    Text(debtStateCopy(debt.state)).font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    Text("\(debt.valid_days) of 5 days available").font(.title3.weight(.semibold))
+                    Text("5 days of sleep data are needed within the past 2 weeks.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .card()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Symptom Radar — on-device illness detection. A status pill, then each biomarker
+// plotted against its personal baseline band so you see at a glance how far
+// breathing / lowest HR / HRV / temperature sit from normal.
 struct IllnessCard: View {
     let illness: IllnessResult
-    static var coral: Color { Obs.alert }
     private static let copy = [
-        "NO_SIGNS": "No signs of illness. Your biometrics are sitting within your normal range.",
-        "MINOR_SIGNS": "Minor signs — a few biometrics have drifted outside your usual range. Worth an easy day.",
-        "MAJOR_SIGNS": "Major signs — several biometrics are elevated. Your body may be fighting something.",
+        "NO_SIGNS": "No signs of illness. Your biometrics are within your normal range.",
+        "MINOR_SIGNS": "A few biometrics have drifted outside your usual range. Worth an easy day.",
+        "MAJOR_SIGNS": "Several biometrics are elevated. Your body may be fighting something.",
     ]
-    private static let label = ["NO_SIGNS": "No signs", "MINOR_SIGNS": "Minor signs", "MAJOR_SIGNS": "Major signs"]
+    private static let label = ["NO_SIGNS": "No Signs", "MINOR_SIGNS": "Minor Signs", "MAJOR_SIGNS": "Major Signs"]
     private static let bmName = [
         "AverageBreath": "Breathing", "LowestHeartRate": "Lowest HR",
         "AverageHrv": "HRV", "TemperatureDeviation": "Body temp",
@@ -521,50 +503,33 @@ struct IllnessCard: View {
 
     private var tint: Color {
         switch illness.trafficLight {
-        case "MINOR_SIGNS": return Obs.bad
-        case "MAJOR_SIGNS": return Self.coral
-        default: return Obs.good
+        case "MINOR_SIGNS": return Theme.caution
+        case "MAJOR_SIGNS": return Theme.alert
+        default: return Theme.good
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                ObsTag("symptom radar")
-                Spacer()
-                if illness.available {
-                    Text("\(illness.daysWithData)/30d").font(Obs.mono(10)).foregroundStyle(Obs.trace)
-                }
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeader(title: "Symptom Radar", icon: "dot.radiowaves.left.and.right", tint: tint,
+                       detail: illness.available ? "\(illness.daysWithData) of 30 days" : nil)
             if !illness.available {
                 Text(illness.status == "MISSING_LAST_NIGHT_SLEEP"
                      ? "Wear the ring overnight and sync — last night's data is missing."
                      : "Needs more recent nights (at least 7 of the last 14).")
-                    .font(Obs.prose(14)).foregroundStyle(Obs.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 14)
+                    .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                // status: radar blip + word
-                HStack(spacing: 13) {
+                HStack(spacing: 12) {
                     RadarBlip(tint: tint)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.label[illness.trafficLight] ?? "—")
-                            .font(Obs.prose(20, .semibold)).foregroundStyle(Obs.ink)
-                        Text("illness signals").font(Obs.mono(9)).tracking(1.5)
-                            .foregroundStyle(tint)
+                        Text(Self.label[illness.trafficLight] ?? "—").font(.title3.weight(.semibold))
+                        Text("Illness signals").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.top, 16)
-
-                Text(Self.copy[illness.status] ?? "").font(Obs.prose(13.5)).foregroundStyle(Obs.ink2)
-                    .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 12)
-
-                Rectangle().fill(Obs.trace.opacity(0.28)).frame(height: 0.5)
-                    .padding(.top, 16)
-
+                Text(Self.copy[illness.status] ?? "").font(.subheadline).foregroundStyle(.secondary)
+                Divider()
                 let byType = Dictionary(uniqueKeysWithValues: illness.biomarkers.map { ($0.type, $0) })
-                VStack(spacing: 13) {
+                VStack(spacing: 12) {
                     ForEach(Self.order, id: \.self) { type in
                         if let b = byType[type] {
                             BiomarkerRow(name: Self.bmName[type] ?? type,
@@ -573,15 +538,11 @@ struct IllnessCard: View {
                         }
                     }
                 }
-                .padding(.top, 16)
-
-                Text("on-device illness model · \(illness.date)")
-                    .font(Obs.mono(9)).foregroundStyle(Obs.trace)
-                    .padding(.top, 16)
+                Text("On-device illness model · \(Fmt.monthDay(illness.date))")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .obsCard()
+        .card()
     }
 }
 
@@ -590,11 +551,12 @@ private struct RadarBlip: View {
     let tint: Color
     var body: some View {
         ZStack {
-            Circle().strokeBorder(tint.opacity(0.18), lineWidth: 1).frame(width: 34, height: 34)
-            Circle().strokeBorder(tint.opacity(0.34), lineWidth: 1).frame(width: 22, height: 22)
-            Circle().fill(tint).frame(width: 9, height: 9)
+            Circle().strokeBorder(tint.opacity(0.2), lineWidth: 1.5).frame(width: 40, height: 40)
+            Circle().strokeBorder(tint.opacity(0.4), lineWidth: 1.5).frame(width: 26, height: 26)
+            Circle().fill(tint).frame(width: 11, height: 11)
         }
-        .frame(width: 34, height: 34)
+        .frame(width: 40, height: 40)
+        .accessibilityHidden(true)
     }
 }
 
@@ -605,26 +567,28 @@ private struct BiomarkerRow: View {
     let b: IllnessBiomarker
     let tint: Color
     private var dotColor: Color {
-        guard b.indicatesSymptoms else { return Obs.ink }
-        return b.reason == "ELEVATED" ? IllnessCard.coral : Obs.bad
+        guard b.indicatesSymptoms else { return .primary }
+        return b.reason == "ELEVATED" ? Theme.alert : Theme.caution
     }
     private func fmt(_ v: Double) -> String {
         abs(v) < 10 && v != v.rounded() ? String(format: "%.1f", v) : String(Int(v.rounded()))
     }
     var body: some View {
         HStack(spacing: 12) {
-            Text(name).font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-                .frame(width: 74, alignment: .leading)
+            Text(name).font(.subheadline).foregroundStyle(.secondary)
+                .frame(width: 84, alignment: .leading)
             RangeTrack(value: b.value, lower: b.lower, upper: b.upper,
                        dot: dotColor, flagged: b.indicatesSymptoms)
-                .frame(height: 14)
+                .frame(height: 16)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(fmt(b.value)).font(Obs.mono(13, .medium))
-                    .foregroundStyle(b.indicatesSymptoms ? dotColor : Obs.ink).monospacedDigit()
-                Text(unit).font(Obs.mono(9)).foregroundStyle(Obs.trace)
+                Text(fmt(b.value)).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(b.indicatesSymptoms ? dotColor : .primary).monospacedDigit()
+                Text(unit).font(.caption2).foregroundStyle(.secondary)
             }
-            .frame(width: 56, alignment: .trailing)
+            .frame(width: 60, alignment: .trailing)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name) \(fmt(b.value)) \(unit), normal range \(fmt(b.lower)) to \(fmt(b.upper))")
     }
 }
 
@@ -642,96 +606,125 @@ private struct RangeTrack: View {
             let span = max(hi - lo, 1e-6)
             let x = { (v: Double) in CGFloat((v - lo) / span) * w }
             ZStack(alignment: .leading) {
-                Capsule().fill(Obs.trace.opacity(0.22)).frame(height: 3).position(x: w / 2, y: midY)
-                Capsule().fill(Obs.chart.opacity(0.35))
-                    .frame(width: max(0, x(upper) - x(lower)), height: 3)
+                Capsule().fill(Color(.tertiarySystemFill)).frame(height: 4).position(x: w / 2, y: midY)
+                Capsule().fill(Theme.good.opacity(0.45))
+                    .frame(width: max(0, x(upper) - x(lower)), height: 4)
                     .position(x: (x(lower) + x(upper)) / 2, y: midY)
-                Circle().fill(dot).frame(width: 9, height: 9)
-                    .overlay(Circle().stroke(Obs.base.opacity(0.9), lineWidth: 1.5))
-                    .shadow(color: flagged ? dot.opacity(0.6) : .clear, radius: 3)
-                    .position(x: min(max(x(value), 4.5), w - 4.5), y: midY)
+                Circle().fill(dot).frame(width: 11, height: 11)
+                    .overlay(Circle().stroke(Color(.secondarySystemGroupedBackground), lineWidth: 2))
+                    .shadow(color: flagged ? dot.opacity(0.5) : .clear, radius: 3)
+                    .position(x: min(max(x(value), 5.5), w - 5.5), y: midY)
             }
         }
     }
 }
 
-private enum DebtGraph: String, CaseIterable { case debt = "Cumulative debt", sleep = "Total sleep" }
+private enum DebtGraph: String, CaseIterable, Identifiable {
+    case debt = "Debt", sleep = "Sleep"
+    var id: String { rawValue }
+}
 
 private struct SleepDebtChart: View {
     let debt: SleepDebtSummary
     let mode: DebtGraph
     var body: some View {
-        VStack(spacing: 8) {
-            Canvas { context, size in
-                let values: [Double?] = debt.days.map {
-                    mode == .debt ? $0.cumulative_debt_min : $0.total_sleep_min
-                }
-                let maxValue = mode == .debt ? 600.0 : max(720, values.compactMap { $0 }.max() ?? 0)
-                let x = { (i: Int) in CGFloat(i) / CGFloat(max(1, values.count - 1)) * size.width }
-                let y = { (v: Double) in size.height - CGFloat(min(max(v / maxValue, 0), 1)) * size.height }
-                for fraction in [0.25, 0.5, 0.75] {
-                    var grid = Path(); let yy = size.height * CGFloat(1 - fraction)
-                    grid.move(to: CGPoint(x: 0, y: yy)); grid.addLine(to: CGPoint(x: size.width, y: yy))
-                    context.stroke(grid, with: .color(Obs.trace.opacity(0.35)), lineWidth: 0.5)
-                }
+        Chart {
+            ForEach(debt.days) { d in
                 if mode == .sleep {
-                    var need = Path(); let yy = y(debt.need_h * 60)
-                    need.move(to: CGPoint(x: 0, y: yy)); need.addLine(to: CGPoint(x: size.width, y: yy))
-                    context.stroke(need, with: .color(Obs.ink.opacity(0.45)), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    if let total = d.total_sleep_min {
+                        BarMark(x: .value("Day", d.date), y: .value("Sleep", total / 60))
+                            .foregroundStyle(total >= d.sleep_need_min ? Theme.sleep : Theme.sleep.opacity(0.45))
+                            .cornerRadius(4)
+                    }
+                } else if let debtMin = d.cumulative_debt_min {
+                    AreaMark(x: .value("Day", d.date), y: .value("Debt", debtMin / 60))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(LinearGradient(colors: [Theme.debt(debt.state).opacity(0.25), .clear],
+                                                        startPoint: .top, endPoint: .bottom))
+                    LineMark(x: .value("Day", d.date), y: .value("Debt", debtMin / 60))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(Theme.debt(debt.state))
+                        .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 }
-                var line = Path(), started = false
-                for (i, value) in values.enumerated() {
-                    guard let value else { started = false; continue }
-                    let point = CGPoint(x: x(i), y: y(value))
-                    if started { line.addLine(to: point) } else { line.move(to: point); started = true }
-                }
-                context.stroke(line, with: .color(Obs.chart), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
-            .frame(height: 180)
-            HStack {
-                Text(debt.days.first.map { String($0.date.suffix(5)) } ?? "").font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-                Spacer()
-                if mode == .sleep {
-                    HStack(spacing: 5) { Rectangle().fill(Obs.ink.opacity(0.45)).frame(width: 16, height: 1); Text("sleep need").font(Obs.mono(10)).foregroundStyle(Obs.ink2) }
-                }
-                Spacer()
-                Text(debt.days.last.map { String($0.date.suffix(5)) } ?? "").font(Obs.mono(10)).foregroundStyle(Obs.ink2)
+            if mode == .sleep {
+                RuleMark(y: .value("Need", debt.need_h))
+                    .foregroundStyle(.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text("Need \(Fmt.minutesText(debt.need_h * 60))").font(.caption2).foregroundStyle(.secondary)
+                    }
             }
         }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: 3)) { value in
+                AxisValueLabel {
+                    if let s = value.as(String.self) { Text(Fmt.monthDay(s)) }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel {
+                    if let v = value.as(Double.self) { Text("\(Int(v)) h") }
+                }
+            }
+        }
+        .chartYScale(domain: 0...(mode == .debt ? 10 : max(12, ceil((debt.days.compactMap(\.total_sleep_min).max() ?? 0) / 60))))
+        .frame(height: 200)
+        .accessibilityLabel(mode == .debt ? "Cumulative sleep debt over the past 14 days" : "Total sleep per day over the past 14 days")
     }
 }
 
 struct SleepDebtDetail: View {
     let debt: SleepDebtSummary
-    @Environment(\.dismiss) private var dismiss
     @State private var graph = DebtGraph.debt
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Obs.canvas.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        if debt.valid {
-                            Text(debtDuration(debt.debt_min)).font(Obs.mono(34, .medium)).foregroundStyle(Obs.debt(debt.state))
-                            Text(debtStateCopy(debt.state)).font(Obs.prose(16)).foregroundStyle(Obs.ink2)
-                        } else {
-                            Text("Not enough data yet").font(Obs.prose(22, .semibold)).foregroundStyle(Obs.ink)
-                            Text("\(debt.valid_days) of 5 sleep days available within the past 2 weeks.")
-                                .font(Obs.mono(12)).foregroundStyle(Obs.ink2)
-                        }
-                        Picker("Graph", selection: $graph) {
-                            ForEach(DebtGraph.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }.pickerStyle(.segmented)
-                        SleepDebtChart(debt: debt, mode: graph)
-                        Rule("how it works")
-                        Text("Sleep debt estimates missed sleep over the past 14 days. Total sleep combines main sleep and naps, recent days carry more weight, and your sleep need (\(debtDuration(debt.need_h * 60))) is personalized from your typical sleep over the past 3 months, ignoring unusually short or long days.")
-                            .font(Obs.prose(14)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
-                    }.padding(24)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    CardHeader(title: "Sleep Debt", icon: "moon.zzz.fill", tint: Theme.sleep,
+                               detail: "Past \(debt.window_days) days")
+                    if debt.valid {
+                        BigValue(parts: Fmt.minutes(debt.debt_min), style: .largeTitle, color: Theme.debt(debt.state))
+                        Text(debtStateCopy(debt.state)).font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        Text("Not enough data yet").font(.title3.weight(.semibold))
+                        Text("\(debt.valid_days) of 5 sleep days available within the past 2 weeks.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Picker("Graph", selection: $graph) {
+                        ForEach(DebtGraph.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.top, 4)
+                    SleepDebtChart(debt: debt, mode: graph)
                 }
+                .card()
+
+                VStack(spacing: 10) {
+                    StatRow(label: "Sleep need", value: Fmt.minutesText(debt.need_h * 60))
+                    Divider()
+                    StatRow(label: "Last night short by", value: Fmt.minutesText(max(0, debt.recent_shortfall_min)))
+                    Divider()
+                    StatRow(label: "Days with sleep", value: "\(debt.valid_days) of \(debt.window_days)")
+                }
+                .card()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("How it works").font(.headline)
+                    Text("Sleep debt estimates missed sleep over the past 14 days. Total sleep combines main sleep and naps, recent days carry more weight, and your sleep need (\(Fmt.minutesText(debt.need_h * 60))) is personalized from your typical sleep over the past 3 months, ignoring unusually short or long days.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                .card()
             }
-            .navigationTitle("sleep debt").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.bottom, 32)
         }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Sleep Debt")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -740,104 +733,139 @@ struct DayReportView: View {
     let s: Summary
     let day: String
     @State var tab: Tab
-    @Environment(\.dismiss) private var dismiss
-    enum Tab: String, CaseIterable { case sleep = "Sleep", activity = "Activity" }
+    enum Tab: String, CaseIterable, Identifiable {
+        case sleep = "Sleep", activity = "Activity"
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        ZStack {
-            Obs.canvas.ignoresSafeArea()
-            VStack(spacing: 0) {
-                HStack(spacing: 14) {
-                    Button { dismiss() } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
-                            Text("Back").font(Obs.mono(13))
-                        }.foregroundStyle(Obs.ink2)
-                    }
-                    Text(day).font(Obs.mono(13, .medium)).foregroundStyle(Obs.ink)
-                    Spacer()
-                    Picker("", selection: $tab) {
-                        ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented).fixedSize()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(Fmt.dayTitle(day))
+                    .font(.title2.bold())
+                    .padding(.top, 4)
+                    .accessibilityAddTraits(.isHeader)
+                if tab == .sleep { SleepReport(s: s, day: day) }
+                else { ActivityReport(s: s, day: day) }
+            }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.bottom, 32)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(Fmt.dayLabel(day))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Report", selection: $tab) {
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .overlay(alignment: .bottom) { Rectangle().fill(Obs.trace.opacity(0.3)).frame(height: 0.5) }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 26) {
-                        if tab == .sleep { SleepReport(s: s, day: day) }
-                        else { ActivityReport(s: s, day: day) }
-                    }
-                    .padding(20).padding(.bottom, 60)
-                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 220)
             }
         }
+        .animation(.snappy, value: tab)
     }
 }
 
 struct SleepReport: View {
     let s: Summary
     let day: String
+    private let grid = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
     var body: some View {
         if let n = s.night(forDay: day) {
             let metrics = (n.stages.flatMap { st in Sleep.metrics(Sleep.smooth(st, 5), inBedS: (n.in_bed_h ?? 0) * 3600) })
             let asleepH = metrics.map { $0.asleepMin / 60 }
 
-            // summary strip
-            HStack(alignment: .top, spacing: 0) {
-                Readout(value: n.in_bed_h.map { String(format: "%.1f h", $0) } ?? "—", caption: "in bed")
-                Readout(value: asleepH.map { String(format: "%.1f h", $0) } ?? "—", caption: "asleep")
-                Readout(value: n.efficiency.map { "\(Int($0))%" } ?? "—", caption: "efficiency")
-                Readout(value: "\(n.start ?? "—")–\(n.end ?? "—")", caption: "bedtime")
-            }
-
-            if n.hasHypnogram {
-                Rule("overnight polysomnograph")
-                stageLegend
-                Polysomnograph(night: n)
-
-                Rule("sleep architecture")
-                StageBar(n: n)
-                HStack(spacing: 16) {
-                    ForEach([("Deep", n.deep_pct), ("Light", n.light_pct), ("REM", n.rem_pct), ("Awake", n.wake_pct)], id: \.0) { name, pct in
-                        Text(name).font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-                            + Text(" \(Int(pct ?? 0))%").font(Obs.mono(11, .medium)).foregroundStyle(Obs.ink)
+            // summary card
+            VStack(alignment: .leading, spacing: 12) {
+                CardHeader(title: "Sleep", icon: "bed.double.fill", tint: Theme.sleep,
+                           detail: "\(n.start ?? "—") – \(n.end ?? "—")")
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("In bed").font(.caption).foregroundStyle(.secondary)
+                        BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")], style: .title2)
+                    }
+                    if let a = asleepH {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Asleep").font(.caption).foregroundStyle(.secondary)
+                            BigValue(parts: Fmt.hoursMinutes(a), style: .title2)
+                        }
+                    }
+                    if let e = n.efficiency {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Efficiency").font(.caption).foregroundStyle(.secondary)
+                            BigValue("\(Int(e))", "%", style: .title2)
+                        }
                     }
                 }
-                if let m = metrics { clinicalGrid(m) }
+                if n.hasHypnogram {
+                    StageBar(n: n).padding(.top, 4)
+                    HStack(spacing: 14) {
+                        ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
+                            HStack(spacing: 5) {
+                                Circle().fill(Theme.stage(code)).frame(width: 8, height: 8)
+                                Text(Theme.stageName(code)).foregroundStyle(.secondary)
+                                Text("\(Int(pct ?? 0))%").fontWeight(.medium).monospacedDigit()
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+            }
+            .card()
+
+            if n.hasHypnogram {
+                VStack(alignment: .leading, spacing: 10) {
+                    CardHeader(title: "Overnight", icon: "waveform.path", tint: Theme.sleep)
+                    Text("Drag across the chart to read a time of night.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Polysomnograph(night: n)
+                }
+                .card()
+
+                if let m = metrics {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CardHeader(title: "Sleep Architecture", icon: "chart.bar.xaxis", tint: Theme.sleep)
+                        clinicalGrid(m)
+                    }
+                    .card()
+                }
 
                 let auto = Sleep.autonomic(hr: n.series?.hr ?? [], hrv: n.series?.hrv ?? [],
                                            stages: Sleep.smooth(n.stages ?? [], 5))
                 if auto.any {
-                    Rule("autonomic recovery by stage")
-                    autonomicGrid(auto)
+                    VStack(alignment: .leading, spacing: 12) {
+                        CardHeader(title: "Recovery by Stage", icon: "heart.fill", tint: Theme.heart)
+                        autonomicGrid(auto)
+                    }
+                    .card()
                 }
 
-                Rule("interpretation")
-                interpretation(n, metrics)
+                VStack(alignment: .leading, spacing: 10) {
+                    CardHeader(title: "What It Means", icon: "text.book.closed.fill", tint: .secondary)
+                    interpretation(n, metrics)
+                }
+                .card()
             } else {
                 // model-free build: signals only, no hypnogram
                 if hasAnySeries(n) {
-                    Rule("overnight signals")
-                    Polysomnograph(night: n)
+                    VStack(alignment: .leading, spacing: 10) {
+                        CardHeader(title: "Overnight Signals", icon: "waveform.path", tint: Theme.sleep)
+                        Text("Drag across the chart to read a time of night.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Polysomnograph(night: n)
+                    }
+                    .card()
                 }
-                Text("On-device sleep staging (SleepNet) runs in the torch build — the hypnogram, sleep cycles, and stage metrics appear there. The raw signals above are model-free.")
-                    .font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+                Text("On-device sleep staging runs in the torch build — the hypnogram, sleep cycles, and stage metrics appear there. The signals above are model-free.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
             }
         } else {
-            Text("No sleep recorded for this night.").font(Obs.mono(13)).foregroundStyle(Obs.ink2)
-        }
-    }
-
-    private var stageLegend: some View {
-        HStack(spacing: 16) {
-            ForEach([(1, "Deep"), (2, "Light"), (3, "REM"), (4, "Awake")], id: \.0) { code, name in
-                HStack(spacing: 5) {
-                    RoundedRectangle(cornerRadius: 2).fill(Obs.stage(code)).frame(width: 9, height: 9)
-                    Text(name).font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-                }
-            }
+            ContentUnavailableView("No Sleep Recorded", systemImage: "bed.double",
+                                   description: Text("The ring did not record a night for this day."))
+                .padding(.top, 40)
         }
     }
 
@@ -849,15 +877,14 @@ struct SleepReport: View {
     @ViewBuilder private func clinicalGrid(_ m: SleepMetrics) -> some View {
         let mins = { (x: Double?) in x.map { "\(Int($0.rounded())) min" } ?? "—" }
         let cells: [(String, String)] = [
-            ("sleep onset", mins(m.solMin)),
-            ("rem latency", mins(m.remLatencyMin)),
-            ("awake · waso", mins(m.wasoMin)),
-            ("awakenings", "\(m.awakenings)"),
-            ("sleep cycles", "\(m.cycles)"),
-            ("fragmentation", String(format: "%.0f /h", m.fragIndex)),
+            ("Sleep onset", mins(m.solMin)),
+            ("REM latency", mins(m.remLatencyMin)),
+            ("Awake after onset", mins(m.wasoMin)),
+            ("Awakenings", "\(m.awakenings)"),
+            ("Sleep cycles", "\(m.cycles)"),
+            ("Fragmentation", String(format: "%.0f /h", m.fragIndex)),
         ]
-        let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-        LazyVGrid(columns: cols, alignment: .leading, spacing: 18) {
+        LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
             ForEach(cells, id: \.0) { Readout(value: $0.1, caption: $0.0) }
         }
     }
@@ -865,28 +892,27 @@ struct SleepReport: View {
     @ViewBuilder private func autonomicGrid(_ a: StageAutonomic) -> some View {
         let hrv = { (x: Double?) in x.map { "\(Int($0)) ms" } ?? "—" }
         let hr = { (x: Double?) in x.map { "\(Int($0)) bpm" } ?? "—" }
-        let cells: [(String, String)] = [
-            ("hrv · deep", hrv(a.hrvDeep)), ("hrv · light", hrv(a.hrvLight)), ("hrv · rem", hrv(a.hrvRem)),
-            ("hr · deep", hr(a.hrDeep)), ("hr · light", hr(a.hrLight)), ("hr · rem", hr(a.hrRem)),
+        let cells: [(String, String, Color)] = [
+            ("HRV · deep", hrv(a.hrvDeep), Theme.deep), ("HRV · core", hrv(a.hrvLight), Theme.light), ("HRV · REM", hrv(a.hrvRem), Theme.rem),
+            ("HR · deep", hr(a.hrDeep), Theme.deep), ("HR · core", hr(a.hrLight), Theme.light), ("HR · REM", hr(a.hrRem), Theme.rem),
         ]
-        let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-        LazyVGrid(columns: cols, alignment: .leading, spacing: 18) {
-            ForEach(cells, id: \.0) { Readout(value: $0.1, caption: $0.0) }
+        LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
+            ForEach(cells, id: \.0) { Readout(value: $0.1, caption: $0.0, color: $0.2) }
         }
     }
 
     @ViewBuilder private func interpretation(_ n: NightRow, _ m: SleepMetrics?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(sentences(n, m), id: \.self) { t in
-                Text(t).font(Obs.prose(14)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+                Text(t).font(.subheadline).foregroundStyle(.secondary)
             }
             if let d = s.sleepDebt, d.valid {
+                Divider()
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(debtDuration(d.debt_min)).font(Obs.mono(20, .medium)).foregroundStyle(Obs.debt(d.state))
-                    Text("accumulated sleep debt vs your \(debtDuration(d.need_h * 60)) nightly need" + (d.recent_shortfall_min > 0 ? " · last sleep day \(Int(d.recent_shortfall_min)) min short" : ""))
-                        .font(Obs.mono(11)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+                    BigValue(parts: Fmt.minutes(d.debt_min), style: .title3, color: Theme.debt(d.state))
+                    Text("sleep debt vs your \(Fmt.minutesText(d.need_h * 60)) nightly need" + (d.recent_shortfall_min > 0 ? " · last night \(Int(d.recent_shortfall_min)) min short" : ""))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.top, 6)
             }
         }
     }
@@ -915,48 +941,66 @@ struct SleepReport: View {
 struct ActivityReport: View {
     let s: Summary
     let day: String
+    private let grid = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
     var body: some View {
         let st = s.activity_daily[day]
         let prof = s.activity_profile[day] ?? []
-        let steps = compactSteps(st?.steps)
 
-        HStack(alignment: .top, spacing: 0) {
-            Readout(value: steps.value, caption: steps.unit)
-            Readout(value: st.map { "\(Int($0.active_kcal ?? 0))" } ?? "—", caption: "active kcal")
-            Readout(value: st.map { "\(Int($0.total_kcal ?? 0))" } ?? "—", caption: "total kcal")
-            if let d = st?.distance_m { Readout(value: String(format: "%.1f", d / 1000), caption: "distance · km") }
-        }
-
-        Rule("movement across the day")
-        MetProfile(timeline: s.wakingActivityTimeline(for: day))
-
-        let bucketMin = prof.isEmpty ? 15.0 : 24.0 * 60.0 / Double(prof.count)
-        let activeMin = Double(prof.filter { $0 >= 3 }.count) * bucketMin
-        let lightMin = Double(prof.filter { $0 >= 1.5 && $0 < 3 }.count) * bucketMin
-        let peak = prof.max() ?? 0
-        let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-        LazyVGrid(columns: cols, alignment: .leading, spacing: 18) {
-            Readout(value: "\(Int(activeMin)) min", caption: "active")
-            Readout(value: "\(Int(lightMin)) min", caption: "lightly active")
-            Readout(value: String(format: "%.1f MET", peak), caption: "peak intensity")
-        }
-
-        let ws = s.workoutsOn(day)
-        Rule("sessions")
-        if ws.isEmpty {
-            Text("No sessions detected this day.").font(Obs.mono(12)).foregroundStyle(Obs.ink2)
-        } else {
-            VStack(spacing: 14) {
-                ForEach(ws) { w in SessionRow(label: w.label, durationMin: w.durationMin, startHM: w.startHM) }
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeader(title: "Activity", icon: "flame.fill", tint: Theme.activity)
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Steps").font(.caption).foregroundStyle(.secondary)
+                    BigValue(Fmt.steps(st?.steps), "", style: .title2)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Active").font(.caption).foregroundStyle(.secondary)
+                    BigValue(Fmt.number(st?.active_kcal), "kcal", style: .title2)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Total").font(.caption).foregroundStyle(.secondary)
+                    BigValue(Fmt.number(st?.total_kcal), "kcal", style: .title2)
+                }
+            }
+            if let d = st?.distance_m {
+                Divider()
+                StatRow(label: "Distance", value: String(format: "%.1f km", d / 1000))
             }
         }
-    }
-}
+        .card()
 
-private func compactSteps(_ steps: Double?) -> (value: String, unit: String) {
-    guard let steps else { return ("—", "steps") }
-    guard steps >= 1_000 else { return ("\(Int(steps.rounded()))", "steps") }
-    return (String(format: "%.1f", steps / 1_000), "k steps")
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeader(title: "Movement", icon: "figure.walk.motion", tint: Theme.activity)
+            MetProfile(timeline: s.wakingActivityTimeline(for: day))
+            let bucketMin = prof.isEmpty ? 15.0 : 24.0 * 60.0 / Double(prof.count)
+            let activeMin = Double(prof.filter { $0 >= 3 }.count) * bucketMin
+            let lightMin = Double(prof.filter { $0 >= 1.5 && $0 < 3 }.count) * bucketMin
+            let peak = prof.max() ?? 0
+            Divider()
+            LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
+                Readout(value: "\(Int(activeMin)) min", caption: "Active")
+                Readout(value: "\(Int(lightMin)) min", caption: "Lightly active")
+                Readout(value: String(format: "%.1f MET", peak), caption: "Peak intensity")
+            }
+        }
+        .card()
+
+        let ws = s.workoutsOn(day)
+        VStack(alignment: .leading, spacing: 8) {
+            CardHeader(title: "Workouts", icon: "figure.run", tint: Theme.activity,
+                       detail: ws.isEmpty ? nil : "\(ws.count)")
+            if ws.isEmpty {
+                Text("No workouts detected this day.").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(ws.enumerated()), id: \.element.id) { i, w in
+                    if i > 0 { Divider() }
+                    SessionRow(label: w.label, durationMin: w.durationMin, startHM: w.startHM)
+                }
+            }
+        }
+        .card()
+    }
 }
 
 // MET-above-rest across the human waking day, rather than a calendar-day 00–24
@@ -964,63 +1008,38 @@ private func compactSteps(_ steps: Double?) -> (value: String, unit: String) {
 private struct MetProfile: View {
     let timeline: WakingActivityTimeline
 
-    private var ticks: [Double] {
-        var result = [timeline.startHour]
-        var hour = ceil(timeline.startHour / 6) * 6
-        while hour < timeline.endHour {
-            if hour - timeline.startHour > 1 { result.append(hour) }
-            hour += 6
-        }
-        if timeline.endHour - (result.last ?? timeline.startHour) > 1 { result.append(timeline.endHour) }
-        return result
-    }
-
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 6) {
             HStack {
-                Text(timeline.startCaption)
+                Text(timeline.startCaption.capitalized)
                 Spacer()
-                Text(timeline.endCaption)
+                Text(timeline.endCaption.capitalized)
             }
-            .font(Obs.mono(9, .medium))
-            .foregroundStyle(Obs.ink2)
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
-            Canvas { ctx, size in
-                let span = max(1, timeline.endHour - timeline.startHour)
-                let x = { (hour: Double) in
-                    size.width * CGFloat((hour - timeline.startHour) / span)
-                }
-                for hour in ticks {
-                    let x = x(hour)
-                    ctx.stroke(Path { $0.move(to: CGPoint(x: x, y: 0)); $0.addLine(to: CGPoint(x: x, y: size.height)) },
-                               with: .color(Obs.trace.opacity(0.2)), lineWidth: 0.5)
-                }
-                guard timeline.points.count > 1 else { return }
-                let peak = max(1, timeline.points.map(\.met).max() ?? 1)
-                func pt(_ point: TimedActivityPoint) -> CGPoint {
-                    CGPoint(x: x(point.hour),
-                            y: 6 + (1 - CGFloat(min(1, point.met / peak))) * (size.height - 12))
-                }
-                var line = Path(); line.move(to: pt(timeline.points[0]))
-                for point in timeline.points.dropFirst() { line.addLine(to: pt(point)) }
-                var area = line
-                area.addLine(to: CGPoint(x: x(timeline.points.last!.hour), y: size.height))
-                area.addLine(to: CGPoint(x: x(timeline.points[0].hour), y: size.height))
-                area.closeSubpath()
-                ctx.fill(area, with: .color(Obs.chart.opacity(0.14)))
-                ctx.stroke(line, with: .color(Obs.chart), lineWidth: 1.3)
+            Chart(timeline.points) { p in
+                AreaMark(x: .value("Hour", p.hour), y: .value("MET", max(0, p.met)))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(colors: [Theme.activity.opacity(0.35), Theme.activity.opacity(0.02)],
+                                                    startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("Hour", p.hour), y: .value("MET", max(0, p.met)))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(Theme.activity)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
             }
-            .frame(height: 120)
-            GeometryReader { g in
-                let span = max(1, timeline.endHour - timeline.startHour)
-                ForEach(ticks, id: \.self) { hour in
-                    let rawX = g.size.width * CGFloat((hour - timeline.startHour) / span)
-                    Text(String(format: "%02d", Int(hour) % 24))
-                        .font(Obs.mono(9)).foregroundStyle(Obs.ink2)
-                        .frame(width: 24)
-                        .position(x: min(max(12, rawX), g.size.width - 12), y: 6)
+            .chartXScale(domain: timeline.startHour...max(timeline.startHour + 1, timeline.endHour))
+            .chartXAxis {
+                AxisMarks(values: .stride(by: 6)) { value in
+                    AxisGridLine().foregroundStyle(.quaternary)
+                    AxisValueLabel {
+                        if let h = value.as(Double.self) { Text(String(format: "%02d", Int(h) % 24)) }
+                    }
                 }
-            }.frame(height: 12)
+            }
+            .chartYAxis(.hidden)
+            .frame(height: 130)
+            .accessibilityLabel("Movement intensity across the waking day")
         }
     }
 }

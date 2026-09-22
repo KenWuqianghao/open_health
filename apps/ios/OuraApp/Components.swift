@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 // Activity type → a clean SF Symbol. Keyword-matched so the ~40 AAD behaviour labels all
 // resolve to a sensible figure.* glyph; unknowns fall back to a neutral cardio symbol.
@@ -44,193 +45,301 @@ func activitySymbol(_ label: String) -> String {
 // Capitalise an activity label's first letter for display.
 func actLabel(_ s: String) -> String { s.isEmpty ? s : s.prefix(1).uppercased() + s.dropFirst() }
 
-// A labelled activity/workout row: clean SF Symbol + name, duration + start time.
+// ── card primitives ──────────────────────────────────────────────────────────
+
+/// A Health-style content card: secondary grouped background, continuous corners.
+struct Card: ViewModifier {
+    var padding: CGFloat = Theme.cardPadding
+    var fillHeight = false
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+    }
+}
+
+extension View {
+    func card(padding: CGFloat = Theme.cardPadding, fillHeight: Bool = false) -> some View {
+        modifier(Card(padding: padding, fillHeight: fillHeight))
+    }
+}
+
+/// The colored category label at the top of a card, with an optional trailing detail
+/// and a chevron when the card opens something.
+struct CardHeader: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    var detail: String? = nil
+    var chevron = false
+    var body: some View {
+        HStack(spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+                .foregroundStyle(tint)
+                .symbolRenderingMode(.hierarchical)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 8)
+            if let detail {
+                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+            }
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// A section title between cards ("Vitals", "Past 14 days").
+struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.title2.bold())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The big number with its unit: "7 hr 41 min", "58 ms".
+struct BigValue: View {
+    let parts: [(String, String)]
+    var style: Font.TextStyle = .title
+    var color: Color = .primary
+    init(_ value: String, _ unit: String, style: Font.TextStyle = .title, color: Color = .primary) {
+        parts = [(value, unit)]; self.style = style; self.color = color
+    }
+    init(parts: [(String, String)], style: Font.TextStyle = .title, color: Color = .primary) {
+        self.parts = parts; self.style = style; self.color = color
+    }
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            ForEach(parts.indices, id: \.self) { i in
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(parts[i].0).font(Theme.number(style)).monospacedDigit().foregroundStyle(color)
+                    if !parts[i].1.isEmpty {
+                        Text(parts[i].1).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(parts.map { "\($0.0) \($0.1)" }.joined(separator: " "))
+    }
+}
+
+/// A label / value row inside a card.
+struct StatRow: View {
+    let label: String
+    let value: String
+    var color: Color = .primary
+    var body: some View {
+        LabeledContent(label) {
+            Text(value).foregroundStyle(color).monospacedDigit()
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+    }
+}
+
+/// A small numeric readout with a caption below it (the report grid atom).
+struct Readout: View {
+    let value: String
+    let caption: String
+    var color: Color = .primary
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(Theme.number(.title3)).monospacedDigit().foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Text(caption).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The one prominent call to action on a screen. Liquid Glass on iOS 26, the
+/// bordered prominent style before that.
+struct PrimaryButton: View {
+    let title: String
+    var systemImage: String? = nil
+    var busy = false
+    let action: () -> Void
+    var body: some View {
+        Group {
+            if #available(iOS 26, *) {
+                button.buttonStyle(.glassProminent)
+            } else {
+                button.buttonStyle(.borderedProminent)
+            }
+        }
+        .controlSize(.large)
+        .disabled(busy)
+    }
+    private var button: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if busy { ProgressView().tint(.white) }
+                else if let systemImage { Image(systemName: systemImage) }
+                Text(title).fontWeight(.semibold)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+struct SecondaryButton: View {
+    let title: String
+    var systemImage: String? = nil
+    let action: () -> Void
+    var body: some View {
+        Group {
+            if #available(iOS 26, *) {
+                button.buttonStyle(.glass)
+            } else {
+                button.buttonStyle(.bordered)
+            }
+        }
+        .controlSize(.large)
+    }
+    private var button: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let systemImage { Image(systemName: systemImage) }
+                Text(title).fontWeight(.medium)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+// A labelled activity/workout row: SF Symbol in a tinted circle, name, duration, start.
 struct SessionRow: View {
     let label: String
     let durationMin: Int
     let startHM: String
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: activitySymbol(label)).font(.system(size: 14))
-                .foregroundStyle(Obs.ink2).frame(width: 20)
-            Text(actLabel(label)).font(Obs.mono(13, .medium)).foregroundStyle(Obs.ink)
+        HStack(spacing: 12) {
+            Image(systemName: activitySymbol(label))
+                .font(.body.weight(.medium))
+                .foregroundStyle(Theme.activity)
+                .frame(width: 36, height: 36)
+                .background(Theme.activity.opacity(0.14), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(actLabel(label)).font(.body.weight(.medium))
+                Text(startHM).font(.subheadline).foregroundStyle(.secondary)
+            }
             Spacer()
-            Text("\(durationMin) min").font(Obs.mono(12)).foregroundStyle(Obs.ink2)
-            Text(startHM).font(Obs.mono(11)).foregroundStyle(Obs.muted)
+            Text("\(durationMin) min").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
         }
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
     }
 }
 
-// ── reusable readout + chart components ───────────────────────────────────────
+// ── charts ───────────────────────────────────────────────────────────────────
+struct IndexedValue: Identifiable {
+    let index: Int
+    let value: Double
+    var id: Int { index }
+}
+
+/// A small trend line for a vitals card. No axes; the latest point is marked.
 struct Sparkline: View {
     let series: [Double]
-    var accent: Color = Obs.chart
+    var accent: Color = .secondary
     var baseline: Double? = nil
 
     var body: some View {
-        Canvas { ctx, size in
-            let values = series.filter(\.isFinite)
-            guard values.count > 1 else { return }
-            let lo = values.min()!, hi = values.max()!
-            let observedSpan = hi - lo
-            let padding = max(observedSpan, 1e-6) * 0.12
-            let domainLo = lo - padding
-            let domainSpan = max(observedSpan + padding * 2, 1e-6)
-            let inset: CGFloat = 2.5
-            let chartHeight = max(1, size.height - inset * 2)
-            let points = values.enumerated().map { index, value in
-                let normalized = observedSpan <= 1e-6 ? 0.5 : (value - domainLo) / domainSpan
-                return CGPoint(
-                    x: inset + (size.width - inset * 2) * CGFloat(index) / CGFloat(values.count - 1),
-                    y: inset + chartHeight * (1 - CGFloat(normalized))
-                )
+        let points = series.enumerated().filter { $0.element.isFinite }
+            .map { IndexedValue(index: $0.offset, value: $0.element) }
+        let lo = points.map(\.value).min() ?? 0
+        let hi = points.map(\.value).max() ?? 1
+        let pad = max(hi - lo, 1e-6) * 0.15
+        Chart {
+            ForEach(points) { p in
+                AreaMark(x: .value("Night", p.index),
+                         yStart: .value("Floor", lo - pad), yEnd: .value("Value", p.value))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(colors: [accent.opacity(0.25), accent.opacity(0)],
+                                                    startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("Night", p.index), y: .value("Value", p.value))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(accent)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
             }
-
-            // A reference line is useful when the summary has a real baseline. Keep it
-            // inside the observed domain rather than stretching the chart to manufacture
-            // visual movement around an off-screen reference.
-            if let baseline, baseline.isFinite, baseline >= lo, baseline <= hi {
-                let y = inset + chartHeight * (1 - CGFloat((baseline - domainLo) / domainSpan))
-                var reference = Path()
-                reference.move(to: CGPoint(x: inset, y: y))
-                reference.addLine(to: CGPoint(x: size.width - inset, y: y))
-                ctx.stroke(reference, with: .color(Obs.trace.opacity(0.55)),
-                           style: StrokeStyle(lineWidth: 0.65, dash: [2.5, 3]))
+            if let last = points.last {
+                PointMark(x: .value("Night", last.index), y: .value("Value", last.value))
+                    .foregroundStyle(accent)
+                    .symbolSize(40)
             }
-
-            // Monotone cubic interpolation rounds the joins without overshooting the
-            // measured points. It is smoother than a polyline but does not invent peaks.
-            let path = monotonePath(points)
-            ctx.stroke(path, with: .color(accent.opacity(0.10)),
-                       style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-            ctx.stroke(path, with: .color(accent.opacity(0.86)),
-                       style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
-
-            for (index, point) in points.enumerated() {
-                let isLatest = index == points.count - 1
-                let radius: CGFloat = isLatest ? 2.2 : 1.7
-                let dot = CGRect(x: point.x - radius, y: point.y - radius,
-                                 width: radius * 2, height: radius * 2)
-                // Real samples remain visible as quiet solid marks; the smooth path is
-                // only interpolation between them. The latest point is slightly stronger
-                // so the direction of time stays clear without a separate axis label.
-                ctx.fill(Path(ellipseIn: dot),
-                         with: .color(accent.opacity(isLatest ? 0.90 : 0.52)))
+            if let baseline, baseline.isFinite, baseline >= lo - pad, baseline <= hi + pad {
+                RuleMark(y: .value("Baseline", baseline))
+                    .foregroundStyle(.tertiary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
         }
-        .frame(height: 30)
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartYScale(domain: (lo - pad)...(hi + pad))
+        .chartLegend(.hidden)
+        .frame(height: 40)
+        .clipped()
         .accessibilityHidden(true)
     }
 }
 
-/// Fritsch-Carlson-style tangents. Sign changes flatten the tangent, and the
-/// slope limiter keeps each Bézier segment inside its data interval.
-private func monotonePath(_ points: [CGPoint]) -> Path {
-    guard points.count > 1 else { return Path() }
-    let deltas = (0..<(points.count - 1)).compactMap { index -> CGFloat? in
-        let dx = points[index + 1].x - points[index].x
-        guard abs(dx) > 1e-6 else { return nil }
-        return (points[index + 1].y - points[index].y) / dx
-    }
-    guard deltas.count == points.count - 1 else {
-        var path = Path()
-        path.move(to: points[0])
-        for p in points.dropFirst() { path.addLine(to: p) }
-        return path
-    }
-    var tangents = Array(repeating: CGFloat.zero, count: points.count)
-    tangents[0] = deltas[0]
-    tangents[points.count - 1] = deltas[deltas.count - 1]
-    if points.count > 2 {
-        for index in 1..<(points.count - 1) {
-            tangents[index] = deltas[index - 1] * deltas[index] <= 0
-                ? 0
-                : (deltas[index - 1] + deltas[index]) / 2
-        }
-    }
-    for index in deltas.indices {
-        if deltas[index] == 0 {
-            tangents[index] = 0
-            tangents[index + 1] = 0
-            continue
-        }
-        let a = tangents[index] / deltas[index]
-        let b = tangents[index + 1] / deltas[index]
-        let magnitude = a * a + b * b
-        if magnitude > 9 {
-            let scale = 3 / sqrt(magnitude)
-            tangents[index] = scale * a * deltas[index]
-            tangents[index + 1] = scale * b * deltas[index]
-        }
-    }
-
-    var path = Path()
-    path.move(to: points[0])
-    for index in 0..<(points.count - 1) {
-        let width = points[index + 1].x - points[index].x
-        path.addCurve(
-            to: points[index + 1],
-            control1: CGPoint(x: points[index].x + width / 3,
-                              y: points[index].y + tangents[index] * width / 3),
-            control2: CGPoint(x: points[index + 1].x - width / 3,
-                              y: points[index + 1].y - tangents[index + 1] * width / 3)
-        )
-    }
-    return path
-}
-
-// A vitals readout: big mono value, unit, delta vs baseline, sparkline.
+// A vitals card: category label, big value, change vs baseline, sparkline.
 struct VitalCell: View {
-    let tag: String
+    let kind: VitalKind
     let value: String
-    let unit: String
     var delta: Double? = nil
     var series: [Double] = []
     var baseline: Double? = nil
-    var deltaGoodWhenPositive = true
     var detail: String? = nil
-    var action: (() -> Void)? = nil
+
     var body: some View {
-        let tone = Obs.tone(delta: delta, goodWhenPositive: deltaGoodWhenPositive)
-        let stack = VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                ObsTag(tag)
-                if action != nil {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Obs.trace)
+        let tone = Theme.tone(delta: delta, goodWhenPositive: kind.goodWhenPositive)
+        NavigationLink(value: Route.vital(kind)) {
+            VStack(alignment: .leading, spacing: 8) {
+                CardHeader(title: kind.shortTitle, icon: kind.icon, tint: kind.tint, chevron: true)
+                BigValue(value, kind.unit, style: .title2)
+                Group {
+                    if let d = delta {
+                        Text("\(d >= 0 ? "+" : "")\(Int(d.rounded()))% vs baseline")
+                            .foregroundStyle(tone)
+                    } else if let detail {
+                        Text(detail).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .lineLimit(1)
+                if series.count > 1 {
+                    Spacer(minLength: 2)
+                    Sparkline(series: series, accent: kind.tint, baseline: baseline)
                 }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value).font(Obs.mono(26, .medium)).foregroundStyle(Obs.ink).monospacedDigit()
-                Text(unit).font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-            }
-            if let d = delta {
-                Text("\(d >= 0 ? "+" : "")\(d, specifier: "%.0f")% vs base")
-                    .font(Obs.mono(10))
-                    .foregroundStyle(tone)
-            }
-            if let detail {
-                Text(detail).font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-            }
-            if series.count > 1 {
-                Sparkline(series: series, accent: tone, baseline: baseline)
-            }
+            .card(fillHeight: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        if let action {
-            Button(action: action) { stack.contentShape(Rectangle()) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(tag) \(value) \(unit)")
-                .accessibilityHint("Shows the trend over time")
-                .accessibilityIdentifier("vital-\(tag)")
-        } else {
-            stack
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(kind.title) \(value) \(kind.unit)")
+        .accessibilityHint("Shows the trend over time")
+        .accessibilityIdentifier("vital-\(kind.rawValue)")
     }
 }
 
-enum VitalPeriod: String, CaseIterable {
-    case d7 = "7d", d14 = "14d", d30 = "30d", d90 = "90d", all = "all"
+enum VitalPeriod: String, CaseIterable, Identifiable {
+    case d7 = "7D", d14 = "14D", d30 = "30D", d90 = "90D", all = "All"
+    var id: String { rawValue }
     var days: Int? {
         switch self {
         case .d7: return 7
@@ -257,13 +366,13 @@ private enum YMD {
     }()
     static func date(_ s: String) -> Date? { fmt.date(from: s) }
     static func string(_ d: Date) -> String { fmt.string(from: d) }
-    static func short(_ s: String) -> String { String(s.suffix(5)) }
 }
 
+/// The full trend page for one vital: period picker, latest value, an interactive
+/// Swift Chart, and the period statistics.
 struct VitalTrendView: View {
     let s: Summary
     let kind: VitalKind
-    @Environment(\.dismiss) private var dismiss
     @State private var period: VitalPeriod = .d30
 
     private var all: [DatedVital] { kind.series(in: s) }
@@ -287,58 +396,63 @@ struct VitalTrendView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Obs.canvas.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        Text(kind.caption).font(Obs.prose(14)).foregroundStyle(Obs.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Picker("Period", selection: $period) {
-                            ForEach(VitalPeriod.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        if let last = points.last {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(format(last.value)).font(Obs.mono(34, .medium)).foregroundStyle(Obs.ink)
-                                Text(kind.unit).font(Obs.mono(14)).foregroundStyle(Obs.ink2)
-                            }
-                            HStack(spacing: 8) {
-                                Text(last.date).font(Obs.mono(12)).foregroundStyle(Obs.muted)
-                                if let d = deltaPct {
-                                    Text("\(d >= 0 ? "+" : "")\(d, specifier: "%.0f")% vs base")
-                                        .font(Obs.mono(12)).foregroundStyle(accent)
-                                }
-                            }
-                        }
-                        if points.count > 1, let window {
-                            VitalTrendChart(points: points, start: window.start, end: window.end,
-                                            baseline: kind.baseline(in: s),
-                                            accent: accent, decimals: kind.decimals)
-                            let values = points.map(\.value)
-                            let avg = values.reduce(0, +) / Double(values.count)
-                            VStack(spacing: 10) {
-                                ObsStat(label: "average", value: "\(format(avg)) \(kind.unit)")
-                                if let lo = values.min() { ObsStat(label: "low", value: "\(format(lo)) \(kind.unit)") }
-                                if let hi = values.max() { ObsStat(label: "high", value: "\(format(hi)) \(kind.unit)") }
-                                ObsStat(label: "nights", value: "\(points.count)")
-                            }
-                            .obsCard()
-                        } else if all.isEmpty {
-                            Text("No readings yet.")
-                                .font(Obs.mono(12)).foregroundStyle(Obs.ink2)
-                        } else {
-                            Text("Not enough nights in this period yet.")
-                                .font(Obs.mono(12)).foregroundStyle(Obs.ink2)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Period", selection: $period) {
+                    ForEach(VitalPeriod.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    CardHeader(title: kind.title, icon: kind.icon, tint: kind.tint,
+                               detail: points.last.map { Fmt.monthDay($0.date) })
+                    if let last = points.last {
+                        BigValue(format(last.value), kind.unit, style: .largeTitle)
+                        if let d = deltaPct {
+                            Text("\(d >= 0 ? "+" : "")\(Int(d.rounded()))% vs baseline")
+                                .font(.subheadline).foregroundStyle(accent)
                         }
                     }
-                    .padding(24)
+                    if points.count > 1, let window {
+                        VitalTrendChart(points: points, start: window.start, end: window.end,
+                                        baseline: kind.baseline(in: s), accent: kind.tint,
+                                        decimals: kind.decimals, unit: kind.unit)
+                            .padding(.top, 4)
+                    } else if all.isEmpty {
+                        Text("No readings yet.").font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        Text("Not enough nights in this period yet.").font(.subheadline).foregroundStyle(.secondary)
+                    }
                 }
+                .card()
+
+                if points.count > 1 {
+                    let values = points.map(\.value)
+                    let avg = values.reduce(0, +) / Double(values.count)
+                    VStack(spacing: 10) {
+                        StatRow(label: "Average", value: "\(format(avg)) \(kind.unit)")
+                        Divider()
+                        StatRow(label: "Lowest", value: "\(format(values.min() ?? 0)) \(kind.unit)")
+                        Divider()
+                        StatRow(label: "Highest", value: "\(format(values.max() ?? 0)) \(kind.unit)")
+                        Divider()
+                        StatRow(label: "Nights", value: "\(points.count)")
+                    }
+                    .card()
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("About").font(.headline)
+                    Text(kind.caption).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .card()
             }
-            .navigationTitle(kind.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.bottom, 32)
         }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(kind.title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var deltaPct: Double? {
@@ -347,12 +461,10 @@ struct VitalTrendView: View {
     }
 
     private var accent: Color {
-        Obs.tone(delta: deltaPct, goodWhenPositive: kind.goodWhenPositive)
+        Theme.tone(delta: deltaPct, goodWhenPositive: kind.goodWhenPositive)
     }
 
-    private func format(_ v: Double) -> String {
-        kind.decimals > 0 ? String(format: "%.\(kind.decimals)f", v) : "\(Int(v.rounded()))"
-    }
+    private func format(_ v: Double) -> String { Fmt.number(v, decimals: kind.decimals) }
 }
 
 private struct VitalTrendChart: View {
@@ -362,105 +474,99 @@ private struct VitalTrendChart: View {
     let baseline: Double?
     let accent: Color
     let decimals: Int
+    let unit: String
+    @State private var selectedDate: Date?
+
+    private struct Sample: Identifiable {
+        let date: Date
+        let value: Double
+        var id: Date { date }
+    }
+
+    private var samples: [Sample] {
+        points.compactMap { p in YMD.date(p.date).map { Sample(date: $0, value: p.value) } }
+    }
+
+    private var selected: Sample? {
+        guard let selectedDate, !samples.isEmpty else { return nil }
+        return samples.min { abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate)) }
+    }
 
     var body: some View {
         let values = points.map(\.value)
         let lo = values.min() ?? 0
         let hi = values.max() ?? 1
-        let pad = max(hi - lo, 1e-6) * 0.12
-        let domainLo = lo - pad
-        let domainHi = hi + pad
-        let span = max(domainHi - domainLo, 1e-6)
-        let t0 = YMD.date(start)?.timeIntervalSince1970 ?? 0
-        let t1 = YMD.date(end)?.timeIntervalSince1970 ?? t0
-        let tSpan = max(t1 - t0, 1)
-        func x(_ date: String, _ width: CGFloat) -> CGFloat {
-            guard let t = YMD.date(date)?.timeIntervalSince1970 else { return 0 }
-            return width * CGFloat((t - t0) / tSpan)
-        }
-        return VStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(tick(domainHi)).font(Obs.mono(9)).foregroundStyle(Obs.muted)
-                    Spacer()
-                    Text(tick((domainLo + domainHi) / 2)).font(Obs.mono(9)).foregroundStyle(Obs.muted)
-                    Spacer()
-                    Text(tick(domainLo)).font(Obs.mono(9)).foregroundStyle(Obs.muted)
-                }
-                .frame(width: 36)
-                Canvas { ctx, size in
-                    for fraction in [0.0, 0.5, 1.0] {
-                        let y = size.height * CGFloat(fraction)
-                        var grid = Path()
-                        grid.move(to: CGPoint(x: 0, y: y))
-                        grid.addLine(to: CGPoint(x: size.width, y: y))
-                        ctx.stroke(grid, with: .color(Obs.trace.opacity(0.4)), lineWidth: 0.5)
+        let pad = max(hi - lo, 1e-6) * 0.15
+        let domainStart = YMD.date(start) ?? Date()
+        let domainEnd = YMD.date(end) ?? Date()
+        Chart {
+            ForEach(samples) { p in
+                AreaMark(x: .value("Date", p.date),
+                         yStart: .value("Floor", lo - pad), yEnd: .value("Value", p.value))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(colors: [accent.opacity(0.22), accent.opacity(0)],
+                                                    startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(accent)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                PointMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                    .foregroundStyle(accent)
+                    .symbolSize(samples.count > 40 ? 0 : 28)
+            }
+            if let baseline, baseline.isFinite {
+                RuleMark(y: .value("Baseline", baseline))
+                    .foregroundStyle(.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text("Baseline").font(.caption2).foregroundStyle(.secondary)
                     }
-                    func pt(_ date: String, _ value: Double) -> CGPoint {
-                        CGPoint(
-                            x: x(date, size.width),
-                            y: size.height * (1 - CGFloat((value - domainLo) / span))
-                        )
-                    }
-                    if let baseline, baseline.isFinite {
-                        let y = size.height * (1 - CGFloat((baseline - domainLo) / span))
-                        if y >= 0, y <= size.height {
-                            var reference = Path()
-                            reference.move(to: CGPoint(x: 0, y: y))
-                            reference.addLine(to: CGPoint(x: size.width, y: y))
-                            ctx.stroke(reference, with: .color(Obs.ink.opacity(0.35)),
-                                       style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+            if let sel = selected {
+                RuleMark(x: .value("Selected", sel.date))
+                    .foregroundStyle(.secondary.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(sel.date, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Text("\(Fmt.number(sel.value, decimals: decimals)) \(unit)")
+                                .font(.caption.weight(.semibold)).monospacedDigit()
                         }
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    let dots = points.map { pt($0.date, $0.value) }
-                    let line = monotonePath(dots)
-                    ctx.stroke(line, with: .color(accent.opacity(0.12)),
-                               style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                    ctx.stroke(line, with: .color(accent),
-                               style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                    for (i, p) in dots.enumerated() {
-                        let last = i == dots.count - 1
-                        let r: CGFloat = last ? 3.2 : 2.1
-                        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                                 with: .color(accent.opacity(last ? 1 : 0.7)))
-                    }
-                }
-                .frame(height: 200)
-                .accessibilityLabel("Trend from \(YMD.short(start)) to \(YMD.short(end))")
+                PointMark(x: .value("Selected", sel.date), y: .value("Value", sel.value))
+                    .foregroundStyle(accent)
+                    .symbolSize(90)
             }
-            HStack {
-                Text(YMD.short(start)).font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-                Spacer()
-                if let mid = midpoint {
-                    Text(YMD.short(mid)).font(Obs.mono(10)).foregroundStyle(Obs.muted)
-                    Spacer()
-                }
-                Text(YMD.short(end)).font(Obs.mono(10)).foregroundStyle(Obs.ink2)
+        }
+        .chartXScale(domain: domainStart...domainEnd)
+        .chartYScale(domain: (lo - pad)...(hi + pad))
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
             }
-            if baseline != nil {
-                HStack(spacing: 5) {
-                    Rectangle().fill(Obs.ink.opacity(0.35)).frame(width: 16, height: 1)
-                    Text("baseline").font(Obs.mono(10)).foregroundStyle(Obs.ink2)
+        }
+        .chartYAxis {
+            // A narrow span (skin temperature moves a few tenths) needs one more
+            // decimal, or three ticks print the same number.
+            let axisDecimals = (hi - lo) < 1 ? decimals + 1 : decimals
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel {
+                    if let v = value.as(Double.self) { Text(Fmt.number(v, decimals: axisDecimals)) }
                 }
             }
         }
-    }
-
-    private var midpoint: String? {
-        guard let a = YMD.date(start), let b = YMD.date(end), b > a else { return nil }
-        let mid = Date(timeIntervalSince1970: (a.timeIntervalSince1970 + b.timeIntervalSince1970) / 2)
-        let s = YMD.string(mid)
-        if s == start || s == end { return nil }
-        return s
-    }
-
-    private func tick(_ v: Double) -> String {
-        decimals > 0 ? String(format: "%.\(decimals)f", v) : "\(Int(v.rounded()))"
+        .chartXSelection(value: $selectedDate)
+        .frame(height: 220)
+        .accessibilityLabel("Trend from \(Fmt.monthDay(start)) to \(Fmt.monthDay(end))")
     }
 }
 
-// Sleep-stage hypnogram: one ink hue, height encoding the stage (deep full →
-// wake short) so the night reads without a rainbow.
+// Sleep-stage strip: one colored block per stage run, like the Health app's night bar.
 struct Hypnogram: View {
     let stages: [Int]
     var height: CGFloat = 40
@@ -472,11 +578,11 @@ struct Hypnogram: View {
                 let frac: CGFloat = switch s { case 1: 1; case 2: 0.72; case 3: 0.48; default: 0.28 }
                 let h = size.height * frac
                 let r = CGRect(x: CGFloat(i) * w, y: size.height - h, width: w + 0.4, height: h)
-                ctx.fill(Path(r), with: .color(Obs.stage(s)))
+                ctx.fill(Path(r), with: .color(Theme.stage(s)))
             }
         }
         .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }
 
@@ -486,22 +592,21 @@ struct MovementRidge: View {
     let profile: [Double]
     var height: CGFloat = 44
     var body: some View {
-        Canvas { ctx, size in
-            guard profile.count > 1 else { return }
-            let peak = max(profile.max() ?? 1, 0.5)
-            let n = profile.count
-            func pt(_ i: Int) -> CGPoint {
-                CGPoint(x: size.width * CGFloat(i) / CGFloat(n - 1),
-                        y: size.height * (1 - CGFloat(min(1, profile[i] / peak))))
-            }
-            var area = Path(); area.move(to: CGPoint(x: 0, y: size.height))
-            for i in 0..<n { area.addLine(to: pt(i)) }
-            area.addLine(to: CGPoint(x: size.width, y: size.height)); area.closeSubpath()
-            ctx.fill(area, with: .color(Obs.chart.opacity(0.14)))
-            var line = Path(); line.move(to: pt(0))
-            for i in 1..<n { line.addLine(to: pt(i)) }
-            ctx.stroke(line, with: .color(Obs.chart.opacity(0.85)), style: .init(lineWidth: 1.2, lineJoin: .round))
+        let points = profile.enumerated().map { IndexedValue(index: $0.offset, value: max(0, $0.element)) }
+        Chart(points) { p in
+            AreaMark(x: .value("Time", p.index), y: .value("MET", p.value))
+                .interpolationMethod(.monotone)
+                .foregroundStyle(LinearGradient(colors: [Theme.activity.opacity(0.35), Theme.activity.opacity(0.02)],
+                                                startPoint: .top, endPoint: .bottom))
+            LineMark(x: .value("Time", p.index), y: .value("MET", p.value))
+                .interpolationMethod(.monotone)
+                .foregroundStyle(Theme.activity)
+                .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
         }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartLegend(.hidden)
         .frame(height: height)
+        .accessibilityHidden(true)
     }
 }

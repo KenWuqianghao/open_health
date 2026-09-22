@@ -2,6 +2,8 @@ import SwiftUI
 
 /// On-device pairing. Four screens: what to do first, the scan list, the probe / pair
 /// result, and the first sync. Shown when no ring is paired, and from Settings.
+/// Laid out as a short onboarding flow: one idea per screen, a symbol, a title, a
+/// line of copy, and the one primary action at the bottom.
 struct PairingView: View {
     let onPaired: (SyncReport) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -10,32 +12,29 @@ struct PairingView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Obs.canvas.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        content
-                    }
-                    .padding(24)
-                }
-            }
-            .navigationTitle("pair").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(canDismiss ? "Close" : "Cancel") {
-                        if !canDismiss { pairing.cancel() }
-                        dismiss()
+            content
+                .background(Color(.systemGroupedBackground))
+                .navigationTitle("Pair Ring")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(canDismiss ? "Close" : "Cancel") {
+                            if !canDismiss { pairing.cancel() }
+                            dismiss()
+                        }
                     }
                 }
-            }
         }
         .interactiveDismissDisabled(!canDismiss)
+        .sensoryFeedback(.success, trigger: isPaired)
         .onChange(of: ring.lastReport?.nextCursor) { _, _ in
             if case .paired = pairing.step, let report = ring.lastReport {
                 onPaired(report)
             }
         }
     }
+
+    private var isPaired: Bool { if case .paired = pairing.step { return true } else { return false } }
 
     private var canDismiss: Bool {
         switch pairing.step {
@@ -47,113 +46,230 @@ struct PairingView: View {
     @ViewBuilder private var content: some View {
         switch pairing.step {
         case .instructions:
-            Text("Pair your ring").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            para("A ring accepts a new key only while it is factory-reset. This app makes its own key on this iPhone and keeps it in the Keychain.")
-            step(1, "Factory-reset the ring. In the official Oura app, remove the ring, then fully close that app. Or use the charger reset described in the docs.")
-            step(2, "Put the ring on its charger next to this iPhone. A reset ring shows no name in the scan — that is normal.")
-            step(3, "Turn off Bluetooth on any other phone that has the official Oura app. The ring holds one link at a time.")
-            step(4, "On Ring 3, iOS may show a Bluetooth pairing request. Accept it.")
-            primary("Scan for rings") { Task { await pairing.startScan() } }
-        case .scanning, .choose:
-            Text("Rings in range").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            if case .scanning = pairing.step {
-                HStack(spacing: 8) { ProgressView().tint(Obs.ink); Text(pairing.status).font(Obs.mono(12)).foregroundStyle(Obs.ink2) }
-            } else if !pairing.status.isEmpty {
-                Text(pairing.status).font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(pairing.candidates) { cand in
-                Button { Task { await pairing.choose(cand) } } label: {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(cand.displayName).font(Obs.mono(13, .medium)).foregroundStyle(Obs.ink)
-                            Text("id …\(cand.id.uuidString.suffix(8))\(cand.serviceMatched ? " · Oura service" : "")")
-                                .font(Obs.mono(10)).foregroundStyle(Obs.ink2)
-                        }
-                        Spacer()
-                        Text("\(cand.rssi) dBm").font(Obs.mono(11)).foregroundStyle(Obs.ink2)
-                        Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(Obs.trace)
-                    }
-                    .contentShape(Rectangle())
+            page {
+                hero("circle.circle", tint: Theme.sleep,
+                     title: "Pair your ring",
+                     text: "A ring accepts a new key only while it is factory-reset. This app makes its own key on this iPhone and keeps it in the Keychain.")
+                VStack(alignment: .leading, spacing: 14) {
+                    step(1, "Factory-reset the ring. In the official Oura app, remove the ring, then fully close that app. Or use the charger reset described in the docs.")
+                    step(2, "Put the ring on its charger next to this iPhone. A reset ring shows no name in the scan — that is normal.")
+                    step(3, "Turn off Bluetooth on any other phone that has the official Oura app. The ring holds one link at a time.")
+                    step(4, "On Ring 3, iOS may show a Bluetooth pairing request. Accept it.")
                 }
-                .buttonStyle(.plain)
-                .obsCard()
+                .card()
+            } footer: {
+                PrimaryButton(title: "Scan for Rings", systemImage: "dot.radiowaves.left.and.right") {
+                    Task { await pairing.startScan() }
+                }
             }
-            if case .choose = pairing.step {
-                secondary("Scan again") { Task { await pairing.startScan() } }
+
+        case .scanning, .choose:
+            List {
+                Section {
+                    if pairing.candidates.isEmpty {
+                        if case .scanning = pairing.step {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                Text(pairing.status.isEmpty ? "Looking for rings…" : pairing.status)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            ContentUnavailableView {
+                                Label("No Ring Found", systemImage: "circle.dashed")
+                            } description: {
+                                Text(pairing.status.isEmpty ? "Is the ring on its charger, and is Bluetooth on?" : pairing.status)
+                            }
+                            .listRowBackground(Color.clear)
+                        }
+                    }
+                    ForEach(pairing.candidates) { cand in
+                        Button { Task { await pairing.choose(cand) } } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "circle.circle")
+                                    .font(.title2)
+                                    .foregroundStyle(Theme.sleep)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(cand.displayName).font(.body.weight(.medium)).foregroundStyle(.primary)
+                                    Text("ID …\(cand.id.uuidString.suffix(8))\(cand.serviceMatched ? " · Oura service" : "")")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                SignalBars(rssi: cand.rssi)
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .frame(minHeight: 44)
+                        }
+                        .accessibilityHint("Connects to this ring")
+                    }
+                } header: {
+                    HStack {
+                        Text("Rings in range")
+                        if case .scanning = pairing.step, !pairing.candidates.isEmpty {
+                            ProgressView().controlSize(.mini)
+                        }
+                    }
+                } footer: {
+                    if case .choose = pairing.step, !pairing.candidates.isEmpty, !pairing.status.isEmpty {
+                        Text(pairing.status)
+                    }
+                }
             }
+            .listStyle(.insetGrouped)
+            .safeAreaInset(edge: .bottom) {
+                if case .choose = pairing.step {
+                    SecondaryButton(title: "Scan Again", systemImage: "arrow.clockwise") {
+                        Task { await pairing.startScan() }
+                    }
+                    .padding(Theme.gutter)
+                    .background(.bar)
+                }
+            }
+
         case .probing(let cand):
-            Text(cand.displayName).font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            HStack(spacing: 8) { ProgressView().tint(Obs.ink); Text(pairing.status).font(Obs.mono(12)).foregroundStyle(Obs.ink2) }
+            busy(title: cand.displayName, status: pairing.status.isEmpty ? "Connecting…" : pairing.status)
+
         case .needsReset(let why):
-            Text("Reset needed").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            para(why)
-            primary("Scan again") { Task { await pairing.startScan() } }
+            page {
+                hero("exclamationmark.arrow.trianglehead.2.clockwise.rotate.90", tint: Theme.caution,
+                     title: "Ring needs a reset", text: why)
+            } footer: {
+                PrimaryButton(title: "Scan Again", systemImage: "arrow.clockwise") {
+                    Task { await pairing.startScan() }
+                }
+            }
+
         case .ready(let serial, let generation):
-            Text("Ready to pair").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            VStack(spacing: 12) {
-                ObsStat(label: "serial", value: serial)
-                ObsStat(label: "model", value: generation)
-                ObsStat(label: "state", value: "factory reset")
+            page {
+                hero("checkmark.circle", tint: Theme.good,
+                     title: "Ready to pair",
+                     text: "Pairing installs a new key made on this iPhone, sets the ring clock, and turns on heart-rate and blood-oxygen measurement.")
+                VStack(spacing: 10) {
+                    StatRow(label: "Serial", value: serial)
+                    Divider()
+                    StatRow(label: "Model", value: generation)
+                    Divider()
+                    StatRow(label: "State", value: "Factory reset")
+                }
+                .card()
+            } footer: {
+                PrimaryButton(title: "Pair", systemImage: "link") { Task { await pairing.pair() } }
             }
-            .obsCard()
-            para("Pairing installs a new key made on this iPhone, sets the ring clock, and turns on heart-rate and blood-oxygen measurement.")
-            primary("Pair") { Task { await pairing.pair() } }
+
         case .pairing:
-            Text("Pairing…").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            HStack(spacing: 8) { ProgressView().tint(Obs.ink); Text(pairing.status).font(Obs.mono(12)).foregroundStyle(Obs.ink2) }
+            busy(title: "Pairing…", status: pairing.status)
+
         case .paired(let serial, let battery, let features):
-            Text("Paired").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            VStack(spacing: 12) {
-                ObsStat(label: "serial", value: serial)
-                ObsStat(label: "battery", value: battery)
-                ObsStat(label: "features", value: features.isEmpty ? "—" : features)
+            page {
+                hero("checkmark.seal.fill", tint: Theme.good,
+                     title: "Paired",
+                     text: "The first sync pulls the ring's whole history and can take a while. Keep the app open; if the link drops it reconnects and resumes.")
+                VStack(spacing: 10) {
+                    StatRow(label: "Serial", value: serial)
+                    Divider()
+                    StatRow(label: "Battery", value: battery)
+                    Divider()
+                    StatRow(label: "Features", value: features.isEmpty ? "—" : features)
+                }
+                .card()
+                if ring.busy {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        Text(ring.status.isEmpty ? "Syncing…" : ring.status)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .card()
+                } else if !ring.status.isEmpty {
+                    Label(ring.status, systemImage: ring.lastReport != nil ? "checkmark.circle.fill" : "info.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(ring.lastReport != nil ? Theme.good : .secondary)
+                        .card()
+                }
+            } footer: {
+                if !ring.busy {
+                    PrimaryButton(title: "Done") { dismiss() }
+                }
             }
-            .obsCard()
-            para("The first sync pulls the ring's whole history and can take a while. Keep the app open; if the link drops it reconnects and resumes.")
-            if ring.busy {
-                HStack(spacing: 8) { ProgressView().tint(Obs.ink); Text(ring.status).font(Obs.mono(12)).foregroundStyle(Obs.ink2) }
-            } else if !ring.status.isEmpty {
-                Text(ring.status).font(Obs.mono(12)).foregroundStyle(ring.lastReport != nil ? Obs.good : Obs.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !ring.busy {
-                primary("Done") { dismiss() }
-            }
+
         case .failed(let why):
-            Text("Pairing failed").font(Obs.serif(24)).foregroundStyle(Obs.ink)
-            para(why)
-            primary("Try again") { Task { await pairing.startScan() } }
+            page {
+                hero("xmark.octagon.fill", tint: Theme.alert, title: "Pairing failed", text: why)
+            } footer: {
+                PrimaryButton(title: "Try Again", systemImage: "arrow.clockwise") {
+                    Task { await pairing.startScan() }
+                }
+            }
         }
     }
 
-    private func para(_ t: String) -> some View {
-        Text(t).font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+    // ── building blocks ──────────────────────────────────────────────────────
+    private func page<Content: View, Footer: View>(@ViewBuilder _ content: () -> Content,
+                                                   @ViewBuilder footer: () -> Footer) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) { content() }
+                .padding(Theme.gutter)
+        }
+        .safeAreaInset(edge: .bottom) {
+            footer()
+                .padding(Theme.gutter)
+                .background(.bar)
+        }
+    }
+
+    private func hero(_ symbol: String, tint: Color, title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 56, weight: .medium))
+                .foregroundStyle(tint)
+                .symbolRenderingMode(.hierarchical)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .accessibilityHidden(true)
+            Text(title).font(.largeTitle.bold())
+                .accessibilityAddTraits(.isHeader)
+            Text(text).font(.body).foregroundStyle(.secondary)
+        }
+    }
+
+    private func busy(title: String, status: String) -> some View {
+        VStack(spacing: 16) {
+            ProgressView().controlSize(.large)
+            Text(title).font(.title2.bold())
+            Text(status).font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(Theme.gutter)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func step(_ n: Int, _ t: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("\(n)").font(Obs.mono(12, .bold)).foregroundStyle(Obs.ink)
-                .frame(width: 20, height: 20)
-                .overlay(Circle().stroke(Obs.trace, lineWidth: 0.8))
-            Text(t).font(Obs.mono(12)).foregroundStyle(Obs.ink2).fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(n)").font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Theme.sleep, in: Circle())
+                .accessibilityHidden(true)
+            Text(t).font(.subheadline).foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(n). \(t)")
     }
+}
 
-    private func primary(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(Obs.mono(13, .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .background(Obs.ink).foregroundStyle(Obs.paper)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+/// Signal strength as three bars, like the Wi-Fi glyph in Settings.
+private struct SignalBars: View {
+    let rssi: Int
+    private var level: Int { rssi > -60 ? 3 : (rssi > -75 ? 2 : 1) }
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            ForEach(1...3, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(i <= level ? Color.primary : Color(.tertiarySystemFill))
+                    .frame(width: 4, height: CGFloat(4 + i * 4))
+            }
         }
-    }
-
-    private func secondary(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(Obs.mono(12, .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 10)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Obs.trace, lineWidth: 0.8))
-        }
-        .foregroundStyle(Obs.ink)
+        .accessibilityLabel("Signal \(rssi) dBm")
     }
 }

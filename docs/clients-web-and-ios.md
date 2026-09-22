@@ -70,9 +70,13 @@ a nap doesn't shadow the real sleep.
 
 ## Where the two clients diverge
 
-- **Home layout**: same day-unit model on both, but iOS uses thomas.md Quiet Ink (warm paper,
-  hairlines, serif titles) while the web still uses its own teal/card theme. Match *data/features*,
-  not pixel-for-pixel layout. iOS opens details as sheets; the web as stacked `<dialog>`s.
+- **Home layout**: same day-unit model on both, but iOS follows the Apple Health look
+  (`Theme.swift`: system grouped background, one card per topic with a colored category
+  label, rounded big numbers, Swift Charts, semantic colors and text styles so Dark Mode
+  and Dynamic Type work) while the web still uses its own teal/card theme. Match
+  *data/features*, not pixel-for-pixel layout. iOS pushes details onto a `NavigationStack`
+  (`Route` in `Models.swift`) and uses sheets only for Sync and Settings; the web uses
+  stacked `<dialog>`s.
 - **Pairing**: iOS pairs the ring **on the phone** (`RingPairing.swift` → the Rust
   `RingSession.pair` FFI → `oura_link::pair`). The app makes the 16-byte key with the
   platform CSPRNG, saves it in the Keychain (readable after the first unlock), then

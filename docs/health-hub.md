@@ -60,6 +60,41 @@ Check it:
 curl -s http://127.0.0.1:8787/health
 ```
 
+## Setup without Tailscale Serve (plain HTTP inside the tailnet)
+
+Tailscale traffic is already encrypted end to end, so the hub can speak plain HTTP
+inside the tailnet. The iOS app allows plain HTTP for `*.ts.net` names only
+(`NSAppTransportSecurity` in `Info.plist`). This needs no tailnet setting and no
+certificate.
+
+1. On the server, bind the container to the Tailscale address as well as loopback.
+   Find it with `tailscale ip -4` (for example `100.112.25.101`), then run the
+   container with `-p 127.0.0.1:8787:8787 -p 100.112.25.101:8787:8787`.
+2. The hub URL is `http://<server>.<tailnet>.ts.net:8787`. Print the name with
+   `tailscale status --json | grep DNSName`.
+3. Use that URL in the app and in Grok Bot: `http://<server>.<tailnet>.ts.net:8787/mcp/<token>`.
+
+### Steam Deck (SteamOS)
+
+SteamOS is immutable and refuses the Docker install script. It ships podman, which
+builds the same Dockerfile:
+
+```bash
+podman build -t oura-hub .
+```
+
+```bash
+mkdir -p ~/oura-hub-data && podman run -d --name oura-hub --restart unless-stopped -p 127.0.0.1:8787:8787 -p "$(tailscale ip -4)":8787:8787 -e OURA_HUB_TOKEN="$(cat ~/.hub-token)" -e RUST_LOG=info -v ~/oura-hub-data:/data:Z oura-hub
+```
+
+```bash
+loginctl enable-linger deck && systemctl --user enable --now podman-restart.service
+```
+
+Run these as the `deck` user, not root. Set the Deck's sleep timers to Never and
+keep it on the charger. The community `deck-tailscale` script puts the binaries in
+`/opt/tailscale/`, so call `/opt/tailscale/tailscale` with the full path.
+
 ## Setup on an Ubuntu server, reachable from anywhere
 
 This is the recommended setup: a home server in one place, the phone and the agent
@@ -101,10 +136,12 @@ Backup: the volume `hub-data` holds `hub.db` and `oura.db`; copy them with
 ## Put TLS in front
 
 The hub speaks plain HTTP. Do not expose port 8787 to the internet as is. The
-iPhone refuses plain HTTP to a remote host (App Transport Security), so the hub
-needs HTTPS. Use one of these:
+iPhone refuses plain HTTP to a remote host (App Transport Security) except for
+`*.ts.net` names. Use one of these:
 
-- **Tailscale serve** (above). Private, no open ports, certificate included.
+- **Plain HTTP inside the tailnet** (above). No tailnet setting, no certificate.
+- **Tailscale serve**. Adds HTTPS with a certificate; needs Serve enabled on the
+  tailnet in the admin console.
 - **Caddy** (or any reverse proxy) with a real domain, when the hub must be reachable
   without Tailscale. Caddy gets a certificate for you. Example `Caddyfile`:
 

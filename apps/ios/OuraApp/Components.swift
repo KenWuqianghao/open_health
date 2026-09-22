@@ -610,3 +610,193 @@ struct MovementRidge: View {
         .accessibilityHidden(true)
     }
 }
+
+// ── scores ───────────────────────────────────────────────────────────────────
+/// A 0–100 score as a ring: the Apple Fitness gauge, one accent per score.
+struct ScoreRing: View {
+    let score: Double?
+    let tint: Color
+    var size: CGFloat = 84
+    var lineWidth: CGFloat = 9
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(tint.opacity(0.18), lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: CGFloat(min(1, max(0, (score ?? 0) / 100))))
+                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.snappy, value: score)
+            Text(score.map { "\(Int($0.rounded()))" } ?? "—")
+                .font(Theme.number(size >= 120 ? .largeTitle : .title2))
+                .monospacedDigit()
+                .foregroundStyle(score == nil ? Color.secondary : Color.primary)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The three daily scores side by side. Each ring opens its breakdown.
+struct ScoresCard: View {
+    let s: Summary
+    let day: String
+    var body: some View {
+        let found = ScoreKind.allCases.map { ($0, s.latestScore($0, upTo: day)) }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 0) {
+                ForEach(found, id: \.0) { kind, hit in
+                    NavigationLink(value: Route.score(kind, hit?.day ?? day)) {
+                        VStack(spacing: 8) {
+                            ScoreRing(score: hit?.score.score, tint: kind.tint)
+                            HStack(spacing: 4) {
+                                Text(kind.title).font(.subheadline.weight(.semibold))
+                                if hit?.score.provisional == true {
+                                    Image(systemName: "circle.dotted")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityLabel("provisional")
+                                }
+                            }
+                            if let hit {
+                                let band = Theme.scoreBand(hit.score.score)
+                                Text(hit.day == day ? band.label : Fmt.dayLabel(hit.day))
+                                    .font(.caption)
+                                    .foregroundStyle(hit.day == day ? band.color : .secondary)
+                            } else {
+                                Text("No data").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(hit == nil)
+                    .accessibilityLabel("\(kind.title) score \(hit.map { "\(Int($0.score.score.rounded()))" } ?? "not available")")
+                    .accessibilityHint("Shows the breakdown")
+                }
+            }
+            if found.contains(where: { $0.1?.score.provisional == true }) {
+                Label("Dotted scores are provisional: a baseline is still maturing or the day is not over.",
+                      systemImage: "circle.dotted")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .card()
+    }
+}
+
+/// One score opened up: the ring, the band, then one bar per contributor with the
+/// input behind it and the weight it carried. A score you cannot interrogate is a
+/// horoscope, so the source of every curve is one tap away.
+struct ScoreDetailView: View {
+    let kind: ScoreKind
+    let day: String
+    let score: DailyScore?
+    @State private var showSources = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(spacing: 12) {
+                    ScoreRing(score: score?.score, tint: kind.tint, size: 150, lineWidth: 14)
+                        .padding(.top, 8)
+                    if let score {
+                        let band = Theme.scoreBand(score.score)
+                        Text(band.label)
+                            .font(.headline)
+                            .foregroundStyle(band.color)
+                        if score.provisional {
+                            Label("Provisional", systemImage: "circle.dotted")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("No \(kind.title.lowercased()) score for this day.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .card()
+
+                if let score {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            CardHeader(title: "Contributors", icon: kind.icon, tint: kind.tint)
+                            Toggle("Sources", isOn: $showSources)
+                                .toggleStyle(.button)
+                                .controlSize(.small)
+                                .font(.caption)
+                        }
+                        ForEach(score.contributors) { c in
+                            ContributorRow(c: c, tint: kind.tint, showSource: showSources)
+                        }
+                    }
+                    .card()
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("About").font(.headline)
+                    Text(kind.blurb).font(.subheadline).foregroundStyle(.secondary)
+                    Text("Estimates computed on this iPhone from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .padding(.top, 4)
+                }
+                .card()
+            }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.bottom, 32)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("\(kind.title) · \(Fmt.dayLabel(day))")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ContributorRow: View {
+    let c: ScoreContributor
+    let tint: Color
+    let showSource: Bool
+    private var valueText: String? {
+        guard let v = c.value else { return nil }
+        let number = v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
+        return c.unit.isEmpty ? number : "\(number) \(c.unit)"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                HStack(spacing: 4) {
+                    Text(c.name).font(.subheadline.weight(.medium))
+                    if c.provisional {
+                        Image(systemName: "circle.dotted").font(.caption2).foregroundStyle(.secondary)
+                            .accessibilityLabel("provisional")
+                    }
+                }
+                Spacer()
+                if let valueText {
+                    Text(valueText).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Text("\(Int(c.score.rounded()))")
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .frame(width: 34, alignment: .trailing)
+            }
+            // bar length is the sub-score; opacity is how much it counted
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.tertiarySystemFill)).frame(height: 6)
+                    Capsule().fill(tint.opacity(0.45 + 0.55 * min(1, c.weight * 3)))
+                        .frame(width: geo.size.width * CGFloat(c.score / 100), height: 6)
+                }
+            }
+            .frame(height: 6)
+            HStack {
+                Text("\(Int((c.weight * 100).rounded()))% of the score").font(.caption2).foregroundStyle(.tertiary)
+                if showSource {
+                    Text("· \(c.source)").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(c.name) \(Int(c.score.rounded())) out of 100\(valueText.map { ", \($0)" } ?? ""), \(Int((c.weight * 100).rounded())) percent of the score")
+    }
+}

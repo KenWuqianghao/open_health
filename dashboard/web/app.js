@@ -142,6 +142,100 @@ const relAge = (diff) => {
   return { short: "in line", long: "in line with" };
 };
 
+// ── daily scores: Sleep / Readiness / Activity ──────────────────────────────
+// `scores.days[ymd]` from oura-analysis::scores (see open_oura docs/algorithms/
+// live-scores.md): Oura's contributor sets and recovered weights with documented
+// curves. The ring is the number; the dialog is the breakdown. Mirrors the iOS
+// ScoresCard → ScoreDetailView.
+const SCORE_KINDS = [
+  { key: "readiness", name: "Readiness", tint: "#0f8f8f" },
+  { key: "sleep", name: "Sleep", tint: "#5856d6" },
+  { key: "activity", name: "Activity", tint: "#e0791f" },
+];
+
+function scoreBand(v) {
+  if (v >= 85) return { label: "Optimal", kind: "ok" };
+  if (v >= 70) return { label: "Good", kind: "neutral" };
+  if (v >= 60) return { label: "Fair", kind: "warn" };
+  return { label: "Pay attention", kind: "warn" };
+}
+
+function scoreRingSvg(v, cls = "") {
+  const r = 40, c = 2 * Math.PI * r, f = v == null ? 0 : Math.max(0, Math.min(1, v / 100)) * c;
+  return `<svg viewBox="0 0 100 100" class="${cls}" aria-hidden="true">
+    <circle class="ring-track" cx="50" cy="50" r="${r}"></circle>
+    <circle class="ring-fill" cx="50" cy="50" r="${r}" stroke-dasharray="${f} ${c}"></circle>
+    <text class="ring-num" x="50" y="50">${v == null ? "—" : Math.round(v)}</text>
+  </svg>`;
+}
+
+function scoresFor(d, ymd) {
+  const days = d.scores?.days || {};
+  if (ymd && days[ymd]) return { ymd, day: days[ymd] };
+  const latest = d.scores?.latest;
+  return latest && days[latest] ? { ymd: latest, day: days[latest] } : null;
+}
+
+function renderScores(d) {
+  const box = $("scores");
+  if (!box) return;
+  box.innerHTML = "";
+  const found = scoresFor(d, dayKeys(d)[0]);
+  if (!found) {
+    box.append(el("div", "scores-foot", "Scores appear after the first night with sleep and heart data."));
+    return;
+  }
+  let provisional = false;
+  for (const kind of SCORE_KINDS) {
+    const sc = found.day[kind.key];
+    const btn = document.createElement("button");
+    btn.className = "score";
+    btn.type = "button";
+    btn.style.setProperty("--score-tint", kind.tint);
+    btn.disabled = !sc;
+    const band = sc ? scoreBand(sc.score) : null;
+    provisional ||= !!sc?.provisional;
+    btn.innerHTML = `${scoreRingSvg(sc?.score)}
+      <span class="score-name">${kind.name}${sc?.provisional ? " ·" : ""}</span>
+      <span class="score-band ${band ? band.kind : ""}">${band ? band.label : "No data"}</span>`;
+    btn.setAttribute("aria-label", `${kind.name} score ${sc ? Math.round(sc.score) : "not available"}`);
+    if (sc) btn.addEventListener("click", () => openScore(kind, found.ymd, sc));
+    box.append(btn);
+  }
+  box.append(el("div", "scores-foot", `${esc(found.ymd)} · on-device estimates${provisional ? " · dotted scores are provisional (a baseline is still maturing or the day is not over)" : ""}`));
+}
+
+function openScore(kind, ymd, sc) {
+  let dlg = $("score-dialog");
+  if (!dlg) {
+    dlg = el("dialog", "dialog score-dlg"); dlg.id = "score-dialog";
+    document.body.append(dlg);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  }
+  dlg.style.setProperty("--score-tint", kind.tint);
+  const band = scoreBand(sc.score);
+  const fmtVal = (c) => {
+    if (c.value == null) return "";
+    const n = Number.isInteger(c.value) ? c.value : c.value.toFixed(1);
+    return c.unit ? `${n} ${c.unit}` : `${n}`;
+  };
+  dlg.innerHTML = `<form method="dialog">
+    <div class="sd-detail-head"><div><h3>${kind.name}</h3><div class="dialog-sub">${esc(dayTitle(ymd))}</div></div><button class="dd-close" aria-label="Close">×</button></div>
+    <div class="score-hero">${scoreRingSvg(sc.score)}
+      <div><div class="score-band ${band.kind}"><b>${band.label}</b></div>
+      ${sc.provisional ? `<div class="scores-foot">Provisional: a baseline is still maturing or the day is not over.</div>` : ""}
+      <div class="scores-foot">${esc(sc.basis || "")}</div></div></div>
+    <div class="contrib">${(sc.contributors || []).map((c) => `
+      <div class="contrib-row">
+        <div class="contrib-head"><span>${esc(c.name)}${c.provisional ? " ·" : ""} <span class="contrib-val">${esc(fmtVal(c))}</span></span><b>${Math.round(c.score)}</b></div>
+        <div class="contrib-bar"><i style="width:${Math.max(2, Math.min(100, c.score))}%; opacity:${(0.45 + 0.55 * Math.min(1, c.weight * 3)).toFixed(2)}"></i></div>
+        <div class="contrib-src">${Math.round(c.weight * 100)}% of the score · ${esc(c.source)}</div>
+      </div>`).join("")}</div>
+    <p class="subhead">About</p><p class="sd-copy">Estimates from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them.</p>
+  </form>`;
+  dlg.showModal();
+}
+
 function renderTiles(d) {
   const box = $("tiles");
   box.innerHTML = "";
@@ -1498,6 +1592,7 @@ async function load() {
   renderDay(d);
   renderSleepDebt(d);
   renderIllness(d);
+  renderScores(d);
   renderCardio(d);
   renderSpo2(d);
   renderDevice(d);

@@ -661,11 +661,12 @@ body.page-open { overflow: hidden; }
     gap: 20px;
   }
   .dashboard-main, .dashboard-side { display: contents; }
-  .dashboard-grid #day-panel { grid-row: 1; }
-  .dashboard-grid #sleep-debt-panel { grid-row: 2; }
-  .dashboard-grid #tiles { grid-row: 3; }
-  .dashboard-grid #clinical-grid { grid-row: 4; }
-  .dashboard-grid #device-panel { grid-row: 5; }
+  .dashboard-grid #scores-panel { grid-row: 1; }
+  .dashboard-grid #day-panel { grid-row: 2; }
+  .dashboard-grid #sleep-debt-panel { grid-row: 3; }
+  .dashboard-grid #tiles { grid-row: 4; }
+  .dashboard-grid #clinical-grid { grid-row: 5; }
+  .dashboard-grid #device-panel { grid-row: 6; }
   .dashboard-grid #device-panel .device { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid #device-panel .dh-stats { grid-template-columns: repeat(4, 1fr); }
 }
@@ -852,3 +853,30 @@ body.page-open { overflow: hidden; }
 .il-bm-val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
 .il-bm-val em { font-style: normal; color: var(--muted); font-size: 11px; margin-left: 4px; }
 .il-foot { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: 0.02em; }
+
+/* ── daily scores (Sleep / Readiness / Activity) ─────────────────────────── */
+.scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s4); }
+.score { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding: var(--s3) var(--s2); border-radius: var(--radius); background: none; border: 1px solid transparent; cursor: pointer; color: inherit; font: inherit; }
+.score:hover { border-color: var(--hover-line); background: var(--hover-fill); }
+.score:disabled { cursor: default; opacity: 0.6; }
+.score svg { width: 92px; height: 92px; }
+.score .ring-track { fill: none; stroke: color-mix(in oklab, var(--score-tint) 18%, transparent); stroke-width: 9; }
+.score .ring-fill { fill: none; stroke: var(--score-tint); stroke-width: 9; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dasharray 400ms ease; }
+.score .ring-num { font-family: var(--sans); font-weight: 650; font-size: 26px; fill: var(--text); text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
+.score .score-name { font-weight: 600; font-size: 13.5px; }
+.score .score-band { font-size: 12px; color: var(--muted); }
+.score .score-band.ok { color: var(--good); }
+.score .score-band.warn { color: var(--warn); }
+.scores-foot { grid-column: 1 / -1; font-size: 12px; color: var(--faint); }
+.score-dlg .contrib { display: grid; gap: var(--s3); margin-top: var(--s4); }
+.score-dlg .contrib-row { display: grid; gap: 4px; }
+.score-dlg .contrib-head { display: flex; justify-content: space-between; gap: var(--s3); font-size: 13.5px; }
+.score-dlg .contrib-head b { font-variant-numeric: tabular-nums; }
+.score-dlg .contrib-val { color: var(--muted); font-family: var(--mono); font-size: 12.5px; }
+.score-dlg .contrib-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.score-dlg .contrib-bar i { display: block; height: 100%; border-radius: 3px; background: var(--score-tint); }
+.score-dlg .contrib-src { font-size: 11.5px; color: var(--faint); }
+.score-dlg .score-hero { display: flex; align-items: center; gap: var(--s4); }
+.score-dlg .score-hero svg { width: 120px; height: 120px; }
+.score-dlg .score-hero .ring-num { font-size: 34px; }
+@media (max-width: 640px) { .scores { grid-template-columns: repeat(3, 1fr); gap: var(--s2); } .score svg { width: 76px; height: 76px; } }

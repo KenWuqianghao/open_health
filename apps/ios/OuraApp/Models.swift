@@ -47,7 +47,86 @@ struct NightRow: Codable, Identifiable {
     var hasHypnogram: Bool { (stages?.count ?? 0) > 1 }
 }
 struct DailyStat: Codable { var active_kcal: Double?; var total_kcal: Double?; var steps: Double?; var distance_m: Double? }
-struct Profile: Codable { var sex: String?; var age: Double?; var height_m: Double?; var weight_kg: Double?; var ring_size: Double? }
+struct Profile: Codable {
+    var sex: String?; var age: Double?; var height_m: Double?; var weight_kg: Double?; var ring_size: Double?
+    /// Daily active-calorie goal for the Activity score.
+    var activity_goal_kcal: Double?
+}
+
+// ── live scores (oura-analysis::scores via build_summary) ────────────────────
+/// One contributor of a score: its 0–100 sub-score, the share of the final score it
+/// carried, and the input behind it.
+struct ScoreContributor: Codable, Identifiable {
+    var key: String
+    var name: String
+    var score: Double
+    var weight: Double
+    var value: Double?
+    var unit: String
+    var provisional: Bool
+    var source: String
+    var id: String { key }
+}
+struct DailyScore: Codable {
+    var score: Double
+    var contributors: [ScoreContributor] = []
+    var provisional: Bool = false
+    var basis: String?
+}
+/// The three scores of one wake date. Any of them can be missing.
+struct DayScores: Codable {
+    var sleep: DailyScore?
+    var readiness: DailyScore?
+    var activity: DailyScore?
+    func score(_ kind: ScoreKind) -> DailyScore? {
+        switch kind {
+        case .readiness: return readiness
+        case .sleep: return sleep
+        case .activity: return activity
+        }
+    }
+}
+struct Scores: Codable {
+    var latest: String?
+    var basis: String?
+    var days: [String: DayScores] = [:]
+}
+
+enum ScoreKind: String, CaseIterable, Identifiable, Hashable {
+    case readiness, sleep, activity
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .readiness: return "Readiness"
+        case .sleep: return "Sleep"
+        case .activity: return "Activity"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .readiness: return "bolt.heart.fill"
+        case .sleep: return "bed.double.fill"
+        case .activity: return "flame.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .readiness: return Theme.readiness
+        case .sleep: return Theme.sleep
+        case .activity: return Theme.activity
+        }
+    }
+    var blurb: String {
+        switch self {
+        case .readiness:
+            return "How recovered you are this morning: resting heart rate, HRV, and body temperature against your own 14-day baseline, last night's sleep, sleep balance, recovery index, and yesterday's activity. Oura's eight contributors and weights; the curves are documented estimates."
+        case .sleep:
+            return "Last night against published sleep science: duration (NSF 2015), efficiency, time to fall asleep, time awake, and awakenings (NSF 2017), stage balance (Boulos 2019), and heart rate and HRV against your own baseline."
+        case .activity:
+            return "Today's movement: long sits, active calories against your daily goal, inactive hours, and the past week's training volume and frequency. Oura's five contributors and weights; the breakpoints are documented estimates."
+        }
+    }
+}
 // a detected activity session (on-device automatic_activity_detection)
 struct WorkoutSession: Identifiable, Codable {
     let start: String; let end: String; let durationMin: Int; let label: String; let isWorkout: Double
@@ -115,6 +194,7 @@ struct Summary: Codable {
     var cardio: Cardio?
     var fitness: Fitness?
     var sleepDebt: SleepDebtSummary?
+    var scores: Scores?
     var illness: IllnessResult?           // on-device only (Symptom Radar; not in the JSON)
     var workouts: [WorkoutSession] = []   // on-device only (not in the JSON)
     var modelErrors: [String] = []        // on-device model failures (not in the JSON)
@@ -122,7 +202,7 @@ struct Summary: Codable {
     // `workouts`/`modelErrors` are filled on-device (not in the FFI JSON), so keep them
     // out of decoding.
     enum CodingKeys: String, CodingKey {
-        case digest, device, nights, vitals, activity_profile, activity_daily, profile, cardio, fitness, error
+        case digest, device, nights, vitals, activity_profile, activity_daily, profile, cardio, fitness, error, scores
         case sleepDebt = "sleep_debt"
     }
     /// recent days (newest first) that have a movement profile.
@@ -274,8 +354,19 @@ struct ReportSel: Identifiable, Hashable { let day: String; let sleep: Bool; var
 enum Route: Hashable {
     case report(ReportSel)
     case vital(VitalKind)
+    case score(ScoreKind, String)
     case allDays
     case sleepDebt
+}
+
+extension Summary {
+    /// The score of `kind` for `day`, or the newest earlier day that has one — so a
+    /// morning without a night still shows the last readiness, labelled with its date.
+    func latestScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {
+        guard let days = scores?.days else { return nil }
+        return days.keys.filter { $0 <= day }.sorted(by: >)
+            .lazy.compactMap { d in days[d]?.score(kind).map { (d, $0) } }.first
+    }
 }
 
 // A calendar-day activity profile is convenient for storage, but people experience

@@ -406,6 +406,7 @@ async fn main() -> Result<()> {
                 height_m: *height,
                 weight_kg: *weight,
                 ring_size: 10.0,
+                ..Default::default()
             };
             // where the /dna explorer reads genome files from (flag → env → repo default)
             dna::set_genomes_dir(dna_files.clone());

@@ -10,6 +10,7 @@ enum Theme {
     // ── metric accents (the Apple Health category hues) ──────────────────────
     static let sleep = Color.indigo
     static let activity = Color.orange
+    static let readiness = Color.teal
     static let heart = Color.red
     static let hrv = Color.mint
     static let temperature = Color.purple
@@ -39,6 +40,16 @@ enum Theme {
         guard let d = delta, abs(d) >= threshold else { return .secondary }
         let isGood = d >= 0 ? goodWhenPositive : !goodWhenPositive
         return isGood ? good : alert
+    }
+
+    /// Oura's three score bands: optimal from 85, good from 70, pay attention below.
+    static func scoreBand(_ score: Double) -> (label: String, color: Color) {
+        switch score {
+        case 85...: return ("Optimal", good)
+        case 70..<85: return ("Good", .secondary)
+        case 60..<70: return ("Fair", caution)
+        default: return ("Pay attention", alert)
+        }
     }
 
     static func debt(_ state: String) -> Color {

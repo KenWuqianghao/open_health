@@ -7,6 +7,7 @@ private struct EditableProfile {
     var heightCm: Double
     var weightKg: Double
     var ringSize: Double
+    var activityGoalKcal: Double
 
     init(_ profile: Profile?) {
         sex = profile?.sex ?? "M"
@@ -14,6 +15,7 @@ private struct EditableProfile {
         heightCm = (profile?.height_m ?? 1.78) * 100
         weightKg = profile?.weight_kg ?? 75
         ringSize = profile?.ring_size ?? 10
+        activityGoalKcal = profile?.activity_goal_kcal ?? 450
     }
 }
 
@@ -24,6 +26,7 @@ private enum ProfileStore {
         let object: [String: Any] = [
             "sex": p.sex, "age": p.age, "height_m": p.heightCm / 100,
             "weight_kg": p.weightKg, "ring_size": p.ringSize,
+            "activity_goal_kcal": p.activityGoalKcal,
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
@@ -161,6 +164,14 @@ struct ProfileSettingsView: View {
                     Text("Your data")
                 } footer: {
                     Text("Stored only on this iPhone and used by the cardiovascular and activity calculations.")
+                }
+
+                Section {
+                    numberField("Daily activity goal", value: $profile.activityGoalKcal, unit: "kcal")
+                } header: {
+                    Text("Scores")
+                } footer: {
+                    Text("Active calories per day for the Activity score's \"Meet daily goal\". Oura adapts this goal to you; here it is a fixed number.")
                 }
 
                 Section {

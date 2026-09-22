@@ -93,7 +93,23 @@ struct AllDaysView: View {
         List(s.days, id: \.self) { day in
             NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
+                    HStack {
+                        Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
+                        Spacer()
+                        if let sc = s.scores?.days[day] {
+                            HStack(spacing: 10) {
+                                ForEach(ScoreKind.allCases) { kind in
+                                    if let v = sc.score(kind)?.score {
+                                        Label("\(Int(v.rounded()))", systemImage: kind.icon)
+                                            .font(.caption.weight(.medium)).monospacedDigit()
+                                            .foregroundStyle(kind.tint)
+                                            .labelStyle(.titleAndIcon)
+                                            .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
+                                    }
+                                }
+                            }
+                        }
+                    }
                     HStack(spacing: 14) {
                         if let n = s.night(forDay: day), let h = n.in_bed_h {
                             Label(Fmt.hoursMinutes(h).map { "\($0.0) \($0.1)" }.joined(separator: " "),
@@ -474,6 +490,8 @@ struct RootView: View {
                     switch route {
                     case .report(let sel): DayReportView(s: s, day: sel.day, tab: sel.sleep ? .sleep : .activity)
                     case .vital(let kind): VitalTrendView(s: s, kind: kind)
+                    case .score(let kind, let day):
+                        ScoreDetailView(kind: kind, day: day, score: s.scores?.days[day]?.score(kind))
                     case .allDays: AllDaysView(s: s)
                     case .sleepDebt:
                         if let debt = s.sleepDebt { SleepDebtDetail(debt: debt) }
@@ -636,6 +654,9 @@ struct RootView: View {
                     // the hero of the home; tap either card for its report.
                     if let day = s.days.first {
                         SectionTitle(Fmt.dayLabel(day))
+                        if s.scores?.days.isEmpty == false {
+                            ScoresCard(s: s, day: day)
+                        }
                         SleepCard(s: s, day: day)
                         ActivityCard(s: s, day: day)
                     }

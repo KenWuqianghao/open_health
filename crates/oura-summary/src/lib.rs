@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
+use oura_analysis::scores::{self, Stats};
 use serde_json::{json, Value};
 
 use oura_store::storage::Store;
@@ -34,12 +35,15 @@ pub struct Demographics {
     pub height_m: f64,
     pub weight_kg: f64,
     pub ring_size: f64,
+    /// Daily active-calorie goal for the Activity score's "Meet daily goal".
+    pub activity_goal_kcal: f64,
 }
 
 impl Demographics {
     pub fn to_json(self) -> Value {
         json!({ "sex": self.sex.to_string(), "age": self.age, "height_m": self.height_m,
-                "weight_kg": self.weight_kg, "ring_size": self.ring_size })
+                "weight_kg": self.weight_kg, "ring_size": self.ring_size,
+                "activity_goal_kcal": self.activity_goal_kcal })
     }
     pub fn from_json(v: &Value) -> Self {
         let d = Demographics::default();
@@ -53,6 +57,10 @@ impl Demographics {
             height_m: v["height_m"].as_f64().unwrap_or(d.height_m),
             weight_kg: v["weight_kg"].as_f64().unwrap_or(d.weight_kg),
             ring_size: v["ring_size"].as_f64().unwrap_or(d.ring_size),
+            activity_goal_kcal: v["activity_goal_kcal"]
+                .as_f64()
+                .filter(|g| *g > 0.0)
+                .unwrap_or(d.activity_goal_kcal),
         }
     }
 }
@@ -64,6 +72,7 @@ impl Default for Demographics {
             height_m: 1.78,
             weight_kg: 75.0,
             ring_size: 10.0,
+            activity_goal_kcal: scores::activity::DEFAULT_GOAL_KCAL,
         }
     }
 }
@@ -649,6 +658,193 @@ fn count_periods(seq: &[i64], code: i64, merge_gap: usize, min_len: usize) -> u3
     merged.iter().filter(|(s, e)| e - s >= min_len).count() as u32
 }
 
+/// One `sleep_phase_data` stage epoch, in the codes the rest of the pipeline speaks:
+/// 1=deep 2=light 3=rem 4=wake (anything unrecognised counts as wake).
+fn stage_code(phase: &str) -> i64 {
+    match phase {
+        "deep" => 1,
+        "light" => 2,
+        "rem" => 3,
+        _ => 4,
+    }
+}
+
+/// Deciseconds of sleep per `sleep_phase_data` epoch.
+const RING_STAGE_EPOCH_DS: i64 = 30 * 10;
+
+/// The ring's OWN hypnogram, assembled from `sleep_phase_data` (tag `0x5a`) pages:
+/// 52 epochs per 14-byte page, pages numbered by the header byte, the whole set
+/// written in one burst when the ring finishes analysing a sleep. The pages carry no
+/// timestamp of their own, only their emission time, so a run is anchored to END at
+/// its last page and runs back at 30 s an epoch (validated in open_health against the
+/// ring's independent per-window sleep record). The returned array spans the whole
+/// in-bed window; time the ring did not analyse is filled with wake, so onset,
+/// efficiency and stage percentages stay measured against time in bed.
+fn ring_hypnograms(pages: &[(i64, i64, Vec<i64>)], nights: &[Night]) -> Vec<(i64, Value)> {
+    let mut runs: Vec<(i64, Vec<i64>)> = Vec::new();
+    let mut previous_page = -1i64;
+    for (ds, page, codes) in pages {
+        if *page == previous_page + 1 && !runs.is_empty() {
+            let run = runs.last_mut().unwrap();
+            run.0 = *ds;
+            run.1.extend_from_slice(codes);
+        } else {
+            runs.push((*ds, codes.clone()));
+        }
+        previous_page = *page;
+    }
+    let mut out = Vec::new();
+    for night in nights {
+        let span_ds = night.end_ds - night.start_ds;
+        if span_ds <= 0 {
+            continue;
+        }
+        let cells = (span_ds / RING_STAGE_EPOCH_DS).max(1) as usize;
+        let mut stages = vec![4i64; cells];
+        let mut painted = false;
+        for (end_ds, codes) in &runs {
+            let start_ds = end_ds - codes.len() as i64 * RING_STAGE_EPOCH_DS;
+            if *end_ds <= night.start_ds || start_ds >= night.end_ds {
+                continue;
+            }
+            for (i, code) in codes.iter().enumerate() {
+                let at = start_ds + i as i64 * RING_STAGE_EPOCH_DS;
+                if at < night.start_ds || at >= night.end_ds {
+                    continue;
+                }
+                stages[(((at - night.start_ds) / RING_STAGE_EPOCH_DS) as usize).min(cells - 1)] = *code;
+                painted = true;
+            }
+        }
+        if !painted {
+            continue;
+        }
+        let share = |code: i64| {
+            let n = stages.iter().filter(|&&c| c == code).count();
+            (n as f64 / stages.len() as f64 * 1000.0).round() / 10.0
+        };
+        let asleep = stages.iter().filter(|&&c| c != 4).count();
+        out.push((
+            night.start_ds,
+            json!({
+                "start_ds": night.start_ds,
+                "stages": stages,
+                "deep_pct": share(1),
+                "light_pct": share(2),
+                "rem_pct": share(3),
+                "wake_pct": share(4),
+                "efficiency_pct": (asleep as f64 / stages.len() as f64 * 1000.0).round() / 10.0,
+                "source": "ring",
+            }),
+        ));
+    }
+    out
+}
+
+/// Share of the night (0–1) that came after resting HR bottomed out — Oura's
+/// recovery index. The minimum is taken on a 5-sample moving mean of the timestamped
+/// overnight HR so one low beat cannot claim the whole night recovered early.
+fn recovery_fraction(hr_t: &[(i64, f64)], start_ds: i64, end_ds: i64) -> Option<f64> {
+    const WINDOW: usize = 5;
+    if hr_t.len() < 12 || end_ds <= start_ds {
+        return None;
+    }
+    let mut samples: Vec<(i64, f64)> = hr_t.to_vec();
+    samples.sort_by_key(|s| s.0);
+    let mut best: Option<(f64, i64)> = None;
+    for w in samples.windows(WINDOW) {
+        let m = w.iter().map(|s| s.1).sum::<f64>() / WINDOW as f64;
+        let at = w[WINDOW / 2].0;
+        if best.is_none_or(|(bm, _)| m < bm) {
+            best = Some((m, at));
+        }
+    }
+    let (_, t_min) = best?;
+    Some(((end_ds - t_min) as f64 / (end_ds - start_ds) as f64).clamp(0.0, 1.0))
+}
+
+/// Nights a personal score baseline looks back over.
+const SCORE_BASELINE_NIGHTS: usize = 14;
+
+/// What one waking day contributes to the Activity score, from the per-minute MET
+/// stream with the sleep windows removed.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+struct DayActivity {
+    /// Minutes awake below 1.5 MET.
+    inactive_min: f64,
+    /// Runs of at least 60 such minutes.
+    long_inactive: f64,
+    /// Minutes at 3 MET or harder.
+    moderate_min: f64,
+    /// Minutes with data.
+    minutes: usize,
+}
+
+/// Per local day (days since epoch) activity stats. `met_min` maps a local minute to
+/// MET above rest; `sleep_windows` are `(start, end)` local minutes to skip.
+fn activity_day_stats(
+    met_min: &std::collections::BTreeMap<i64, f64>,
+    sleep_windows: &[(i64, i64)],
+) -> std::collections::BTreeMap<i64, DayActivity> {
+    const INACTIVE_BELOW: f64 = 0.5; // MET < 1.5
+    const MODERATE_FROM: f64 = 2.0; // MET ≥ 3
+    const LONG_RUN_MIN: i64 = 60;
+    let mut days: std::collections::BTreeMap<i64, DayActivity> = Default::default();
+    let mut run: Option<(i64, i64)> = None; // (start minute, last minute) of an inactive run
+    let flush = |run: &mut Option<(i64, i64)>, days: &mut std::collections::BTreeMap<i64, DayActivity>| {
+        if let Some((start, last)) = run.take() {
+            if last - start + 1 >= LONG_RUN_MIN {
+                days.entry(last.div_euclid(1440)).or_default().long_inactive += 1.0;
+            }
+        }
+    };
+    for (&minute, &met) in met_min {
+        if sleep_windows.iter().any(|&(a, b)| minute >= a && minute < b) {
+            flush(&mut run, &mut days);
+            continue;
+        }
+        let inactive = met < INACTIVE_BELOW;
+        if inactive {
+            match run {
+                Some((_, last)) if minute == last + 1 => run.as_mut().unwrap().1 = minute,
+                _ => {
+                    flush(&mut run, &mut days);
+                    run = Some((minute, minute));
+                }
+            }
+        } else {
+            flush(&mut run, &mut days);
+        }
+        let day = days.entry(minute.div_euclid(1440)).or_default();
+        day.minutes += 1;
+        if inactive {
+            day.inactive_min += 1.0;
+        } else if met >= MODERATE_FROM {
+            day.moderate_min += 1.0;
+        }
+    }
+    flush(&mut run, &mut days);
+    days
+}
+
+/// The per-night inputs the readiness scorer needs, keyed by wake date.
+struct ScoreSeed {
+    wake_day: i64,
+    in_bed_s: f64,
+    sleep: Option<scores::Score>,
+    rhr: Option<f64>,
+    rhr_baseline: Option<Stats>,
+    hrv: Option<f64>,
+    hrv_baseline: Option<Stats>,
+    temp_deviation: Option<f64>,
+    temp_baseline: Option<Stats>,
+    recovery: Option<f64>,
+}
+
+fn score_json(score: &Option<scores::Score>) -> Value {
+    score.as_ref().and_then(|s| serde_json::to_value(s).ok()).unwrap_or(Value::Null)
+}
+
 /// Science-based per-night sleep metrics derived from the model hypnogram (per-epoch
 /// codes 1=deep 2=light 3=rem 4=wake). The epoch length is inferred from the night's
 /// in-bed window so we never hardcode the model's 30 s cadence. Returns clinical
@@ -916,6 +1112,23 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             }
         }
     }
+    // The ring's own hypnogram pages (`sleep_phase_data`, tag 0x5a). Nothing else
+    // needs them; they fill the stages for any night the model runner does not cover.
+    let mut ring_hypnogram_pages: Vec<(i64, i64, Vec<i64>)> = Vec::new();
+    for (ds, tag, jstr, _cu) in &events {
+        if name_of(*tag) != "sleep_phase_data" {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(jstr) {
+            if let (Some(page), Some(phases)) = (v["header"].as_i64(), v["phases"].as_array()) {
+                ring_hypnogram_pages.push((
+                    *ds,
+                    page,
+                    phases.iter().filter_map(|p| p.as_str().map(stage_code)).collect(),
+                ));
+            }
+        }
+    }
     // Sleep windows: raw bedtime markers merged and extended by the sleep-only
     // streams — the same model the Apple Health export uses (`nights.rs`).
     let beds = nights::collect_bed_periods(&events, unix_s_at);
@@ -1023,7 +1236,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
         sleep_ranges: &sleep_ranges,
     });
 
-    let hyps: std::collections::HashMap<i64, Value> = sleep_batch
+    let mut hyps: std::collections::HashMap<i64, Value> = sleep_batch
         .as_ref()
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -1032,6 +1245,11 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
                 .collect()
         })
         .unwrap_or_default();
+    // The ring scores its own hypnogram; use it for any night the model runner did not
+    // cover — which, in a model-free build, is every night.
+    for (start_ds, hypnogram) in ring_hypnograms(&ring_hypnogram_pages, &nights) {
+        hyps.entry(start_ds).or_insert(hypnogram);
+    }
 
     nights.sort_by(|a, b| {
         unix_s_at(a.start_ds, a.captured_unix)
@@ -1053,7 +1271,21 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
 
     let mut nights_json = Vec::new();
     let mut asleep_by_day: std::collections::BTreeMap<i64, i32> = Default::default();
-    for nt in &nights {
+    // Per-night vitals in time order, for the causal personal baselines the scores
+    // use: each night is judged against the nights BEFORE it, never against itself.
+    let night_rhr_all: Vec<Option<f64>> = nights
+        .iter()
+        .map(|nt| nt.hr.iter().cloned().fold(f64::INFINITY, f64::min))
+        .map(|m| m.is_finite().then_some(m))
+        .collect();
+    let night_hrv_all: Vec<Option<f64>> = nights.iter().map(|nt| mean(&nt.rmssd)).collect();
+    let night_temp_all: Vec<Option<f64>> = nights.iter().map(|nt| nightly_skin_temp(&nt.temp)).collect();
+    let trailing = |per_night: &[Option<f64>], i: usize| -> Option<Stats> {
+        let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
+        Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())
+    };
+    let mut score_seeds: Vec<ScoreSeed> = Vec::new();
+    for (ni, nt) in nights.iter().enumerate() {
         let hyp = hyps.get(&nt.start_ds);
         let raw_stages: Vec<i64> = hyp
             .and_then(|h| h["stages"].as_array())
@@ -1077,9 +1309,51 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             ]),
             _ => None,
         };
+        let wake_day = (end_unix as i64 + tz * 3600).div_euclid(86_400);
         if asleep_s > 0 {
-            let wake_day = (end_unix as i64 + tz * 3600).div_euclid(86_400);
             *asleep_by_day.entry(wake_day).or_default() += asleep_s;
+        }
+        // Live scores: this night's sleep score now, the morning's readiness once the
+        // day's activity is known (below).
+        let rhr_baseline = trailing(&night_rhr_all, ni);
+        let hrv_baseline = trailing(&night_hrv_all, ni);
+        let temp_baseline = trailing(&night_temp_all, ni);
+        let night_sleep_score = scores::sleep::score_night(scores::sleep::NightInput {
+            asleep_min: (asleep_s > 0).then(|| asleep_s as f64 / 60.0),
+            in_bed_min: Some(in_bed_s / 60.0),
+            efficiency_pct: hyp.and_then(|h| h["efficiency_pct"].as_f64()),
+            onset_latency_min: metrics["sol_min"].as_f64(),
+            waso_min: metrics["waso_min"].as_f64(),
+            awakenings: metrics["awakenings"].as_f64(),
+            deep_pct: hyp.and_then(|h| h["deep_pct"].as_f64()),
+            rem_pct: hyp.and_then(|h| h["rem_pct"].as_f64()),
+            rhr: night_rhr_all[ni],
+            rhr_baseline,
+            hrv_ms: night_hrv_all[ni],
+            hrv_baseline,
+            age: demo.age,
+        });
+        // A nap must not overwrite the main sleep's morning: the longest night wins.
+        let longer_seed_exists = score_seeds
+            .iter()
+            .any(|seed| seed.wake_day == wake_day && seed.in_bed_s >= in_bed_s);
+        if !longer_seed_exists {
+            score_seeds.retain(|seed| seed.wake_day != wake_day);
+            score_seeds.push(ScoreSeed {
+                wake_day,
+                in_bed_s,
+                sleep: night_sleep_score.clone(),
+                rhr: night_rhr_all[ni],
+                rhr_baseline,
+                hrv: night_hrv_all[ni],
+                hrv_baseline,
+                temp_deviation: match (night_temp_all[ni], temp_baseline) {
+                    (Some(t), Some(b)) => Some(t - b.mean),
+                    _ => None,
+                },
+                temp_baseline,
+                recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
+            });
         }
         nights_json.push(json!({
             "date": date_label(start_unix, tz),
@@ -1119,6 +1393,8 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             // mean HR/HRV per sleep stage (deep/light/rem) — deep-sleep HRV is the
             // recovery-relevant number; null when there's no hypnogram.
             "autonomic": autonomic,
+            // the literature-based night score (breakdown under `scores.days`)
+            "sleep_score": night_sleep_score.as_ref().map(|s| s.score),
         }));
     }
     nights_json.reverse();
@@ -1242,6 +1518,88 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
         })
         .collect::<serde_json::Map<_, _>>()
         .into();
+
+    // ── live scores per wake date ────────────────────────────────────────────
+    let now_unix_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as f64)
+        .unwrap_or(anchor_unix as f64);
+    let today_idx = (now_unix_s as i64 + tz * 3600).div_euclid(86_400);
+    let sleep_windows: Vec<(i64, i64)> = nights
+        .iter()
+        .map(|nt| {
+            let a = ((unix_s_at(nt.start_ds, nt.captured_unix) + tz as f64 * 3600.0) / 60.0).floor() as i64;
+            let b = ((unix_s_at(nt.end_ds, nt.captured_unix) + tz as f64 * 3600.0) / 60.0).ceil() as i64;
+            (a, b)
+        })
+        .collect();
+    let day_stats = activity_day_stats(&met_min, &sleep_windows);
+    let ymd_of = |day: i64| {
+        let (y, m, d) = civil(day);
+        format!("{y:04}-{m:02}-{d:02}")
+    };
+    let active_kcal_on = |day: i64| daily.get(&ymd_of(day)).map(|e| e.0);
+    let mean_of = |vals: &[f64]| (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64);
+    let mut score_days: std::collections::BTreeMap<i64, serde_json::Map<String, Value>> = Default::default();
+    for seed in &score_seeds {
+        let day = seed.wake_day;
+        // 14-day sleep vs need (asleep_by_day only has nights with stages)
+        let sleep_window: Vec<f64> = (day - 13..=day)
+            .filter_map(|d| asleep_by_day.get(&d).map(|&s| s as f64))
+            .filter(|&s| s > 0.0)
+            .collect();
+        let need = sleep_need_s(&asleep_by_day, day) as f64;
+        let sleep_balance_ratio = mean_of(&sleep_window).filter(|_| need > 0.0).map(|m| m / need);
+        let prior_kcal: Vec<f64> = (day - 15..day).filter_map(active_kcal_on).collect();
+        let week_kcal: Vec<f64> = (day - 7..day).filter_map(active_kcal_on).collect();
+        let activity_balance_ratio = match (mean_of(&week_kcal), mean_of(&prior_kcal)) {
+            (Some(w), Some(p)) if p > 0.0 && prior_kcal.len() >= 3 => Some(w / p),
+            _ => None,
+        };
+        let readiness = scores::readiness::score(scores::readiness::Input {
+            sleep_score: seed.sleep.as_ref().map(|s| s.score),
+            rhr: seed.rhr,
+            rhr_baseline: seed.rhr_baseline,
+            hrv_ms: seed.hrv,
+            hrv_baseline: seed.hrv_baseline,
+            temp_deviation_c: seed.temp_deviation,
+            temp_baseline: seed.temp_baseline,
+            sleep_balance_ratio,
+            sleep_balance_days: sleep_window.len(),
+            prev_day_active_kcal: active_kcal_on(day - 1),
+            active_kcal_baseline: Stats::of(&prior_kcal),
+            recovery_fraction: seed.recovery,
+            activity_balance_ratio,
+        });
+        let entry = score_days.entry(day).or_default();
+        entry.insert("sleep".into(), score_json(&seed.sleep));
+        entry.insert("readiness".into(), score_json(&readiness));
+    }
+    for (&day, stats) in &day_stats {
+        if stats.minutes < 30 {
+            continue;
+        }
+        let week: Vec<&DayActivity> = (day - 6..=day).filter_map(|d| day_stats.get(&d)).collect();
+        let activity = scores::activity::score(scores::activity::DayInput {
+            inactive_min: Some(stats.inactive_min),
+            long_inactive_periods: Some(stats.long_inactive),
+            active_kcal: active_kcal_on(day),
+            goal_kcal: demo.activity_goal_kcal,
+            week_moderate_min: Some(week.iter().map(|d| d.moderate_min).sum()),
+            week_active_days: Some(week.iter().filter(|d| d.moderate_min >= 20.0).count() as f64),
+            history_days: week.len(),
+            day_complete: day < today_idx,
+        });
+        score_days.entry(day).or_default().insert("activity".into(), score_json(&activity));
+    }
+    let scores_json = json!({
+        "latest": score_days.keys().next_back().map(|&d| ymd_of(d)),
+        "basis": "on-device estimates — see docs/algorithms/live-scores.md",
+        "days": score_days
+            .iter()
+            .map(|(d, v)| (ymd_of(*d), Value::Object(v.clone())))
+            .collect::<serde_json::Map<_, _>>(),
+    });
 
     let hrv_by_night: Vec<Option<f64>> = nights.iter().map(|n| mean(&n.rmssd)).collect();
     let rhr_by_night: Vec<Option<f64>> = nights
@@ -1411,6 +1769,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
         "activity": activity,
         "activity_profile": activity_profile,
         "activity_daily": activity_daily,
+        "scores": scores_json,
         "vitals": {
             "hrv": trend(&hrv_stat),
             "rhr": trend(&rhr_stat),
@@ -1427,6 +1786,56 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ring_hypnogram_pages_anchor_at_their_last_page() {
+        // one night of 20 epochs (10 min); two pages of 5 epochs each, emitted at the
+        // end of the sleep the ring analysed, which finished 2 epochs before bedtime end
+        let night = Night { start_ds: 0, end_ds: 20 * RING_STAGE_EPOCH_DS, ..Default::default() };
+        let end = 18 * RING_STAGE_EPOCH_DS;
+        let pages = vec![
+            (end, 0, vec![1, 1, 1, 2, 2]),
+            (end, 1, vec![2, 3, 3, 3, 4]),
+        ];
+        let out = ring_hypnograms(&pages, &[night]);
+        assert_eq!(out.len(), 1);
+        let stages: Vec<i64> = out[0].1["stages"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+        assert_eq!(stages.len(), 20);
+        // unanalysed time in bed is wake; the run occupies epochs 8..18
+        assert!(stages[..8].iter().all(|&c| c == 4));
+        assert_eq!(&stages[8..18], &[1, 1, 1, 2, 2, 2, 3, 3, 3, 4]);
+        assert!(stages[18..].iter().all(|&c| c == 4));
+        assert_eq!(out[0].1["source"], "ring");
+        // a run entirely outside the night paints nothing
+        let far = vec![(10 * 24 * 3600 * 10, 0, vec![1, 1, 1])];
+        assert!(ring_hypnograms(&far, &[Night { start_ds: 0, end_ds: 6000, ..Default::default() }]).is_empty());
+    }
+
+    #[test]
+    fn activity_day_stats_split_sleep_and_count_long_sits() {
+        let mut met_min = std::collections::BTreeMap::new();
+        // day 0: minutes 0..600 asleep (window), 600..700 inactive, 700..730 moderate,
+        // 730..780 inactive (49 + 1 = 50 min, not a long run), 780..900 inactive (long)
+        for m in 0..900i64 {
+            let met = if (700..730).contains(&m) { 2.5 } else { 0.1 };
+            met_min.insert(m, met);
+        }
+        let days = activity_day_stats(&met_min, &[(0, 600)]);
+        let d = days[&0];
+        assert_eq!(d.minutes, 300);
+        assert_eq!(d.moderate_min, 30.0);
+        assert_eq!(d.inactive_min, 270.0);
+        assert_eq!(d.long_inactive, 2.0, "{d:?}");
+    }
+
+    #[test]
+    fn recovery_fraction_finds_the_night_minimum() {
+        // HR falls until a third of the way in, then rises: two thirds of the night remain
+        let hr_t: Vec<(i64, f64)> = (0..30).map(|i| (i * 100, if i < 10 { 70.0 - i as f64 } else { 60.0 + (i - 10) as f64 })).collect();
+        let f = recovery_fraction(&hr_t, 0, 3000).unwrap();
+        assert!((f - 0.66).abs() < 0.06, "{f}");
+        assert!(recovery_fraction(&hr_t[..5], 0, 3000).is_none());
+    }
 
     fn bed(start_ds: i64, end_ds: i64) -> BedPeriod {
         BedPeriod {

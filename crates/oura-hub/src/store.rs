@@ -159,6 +159,31 @@ impl Store {
         Ok(rows)
     }
 
+    /// The newest sample of every kind. Sparse kinds (VO2 max, resting heart rate)
+    /// may be older than any window the caller uses.
+    pub fn health_latest_per_kind(&self) -> Result<Vec<HealthSample>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT h.uuid, h.kind, h.start_unix, h.end_unix, h.value, h.unit, h.category, h.source_bundle, h.source_name, h.device, h.metadata
+             FROM health_samples h
+             JOIN (SELECT kind, MAX(end_unix) AS newest FROM health_samples GROUP BY kind) n
+               ON n.kind = h.kind AND n.newest = h.end_unix
+             GROUP BY h.kind",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let metadata: Option<String> = r.get(10)?;
+                Ok(HealthSample {
+                    uuid: r.get(0)?, kind: r.get(1)?, start_unix: r.get(2)?, end_unix: r.get(3)?,
+                    value: r.get(4)?, unit: r.get(5)?, category: r.get(6)?, source_bundle: r.get(7)?,
+                    source_name: r.get(8)?, device: r.get(9)?,
+                    metadata: metadata.and_then(|m| serde_json::from_str(&m).ok()),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `(kind, count, newest end_unix)` per kind.
     pub fn health_kinds(&self) -> Result<Vec<(String, i64, f64)>> {
         let conn = self.conn.lock().unwrap();
@@ -221,6 +246,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].metadata, Some(json!({ "k": 1 })));
         assert!(s.health_rows(None, 150.0, 10).unwrap().is_empty());
+        let latest = s.health_latest_per_kind().unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].uuid, "a");
         assert_eq!(s.health_kinds().unwrap(), vec![("heart_rate".to_string(), 1, 100.0)]);
     }
 

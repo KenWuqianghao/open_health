@@ -198,7 +198,9 @@ async fn health_samples_round_trip_and_fold_into_status() {
             { "uuid": "s1", "kind": "step_count", "start_unix": now - 3600.0, "end_unix": now - 3000.0, "value": 1234.0, "unit": "count",
               "source_bundle": "com.apple.health", "source_name": "Ken's Apple Watch" },
             { "uuid": "w1", "kind": "workout", "start_unix": now - 7200.0, "end_unix": now - 5400.0, "value": 30.0, "unit": "min",
-              "category": "cycling", "source_name": "Ken's Apple Watch", "metadata": { "total_energy_kcal": 300.0 } }
+              "category": "cycling", "source_name": "Ken's Apple Watch", "metadata": { "total_energy_kcal": 300.0 } },
+            { "uuid": "v1", "kind": "vo2_max", "start_unix": now - 20.0 * 86400.0, "end_unix": now - 20.0 * 86400.0, "value": 41.5, "unit": "ml/kg/min",
+              "source_bundle": "com.apple.health", "source_name": "Ken's Apple Watch" }
         ],
         "deleted": []
     });
@@ -206,8 +208,8 @@ async fn health_samples_round_trip_and_fold_into_status() {
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     let (s, out) = send(&app, post("/ingest/health", Some(TOKEN), batch.clone())).await;
     assert_eq!(s, StatusCode::OK, "{out}");
-    assert_eq!(out["stored"], 3);
-    assert_eq!(out["total"], 3);
+    assert_eq!(out["stored"], 4);
+    assert_eq!(out["total"], 4);
 
     let uri = format!("/mcp/{TOKEN}");
     // the watch tools work without a ring summary
@@ -218,6 +220,7 @@ async fn health_samples_round_trip_and_fold_into_status() {
     assert_eq!(w["heart_rate_latest"]["value"], 61.0);
     assert_eq!(w["workouts_48h"][0]["activity"], "cycling");
     assert_eq!(w["workouts_48h"][0]["kcal"], 300.0);
+    assert_eq!(w["vo2_max"]["value"], 41.5, "a sparse vital older than the window still has a latest");
 
     let (_, r) = send(&app, post(&uri, None, rpc(2, "tools/call", json!({ "name": "get_health_samples", "arguments": { "kind": "heart_rate", "days": 1 } })))).await;
     assert_eq!(r["result"]["structuredContent"]["count"], 1);
@@ -233,5 +236,5 @@ async fn health_samples_round_trip_and_fold_into_status() {
     let (_, out) = send(&app, post("/ingest/health", Some(TOKEN), del)).await;
     assert_eq!(out["deleted"], 1);
     let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
-    assert_eq!(h["health"].as_array().unwrap().len(), 2);
+    assert_eq!(h["health"].as_array().unwrap().len(), 3);
 }

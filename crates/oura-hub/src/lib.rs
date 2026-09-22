@@ -121,9 +121,17 @@ pub fn tools(store_for_handler: Arc<Store>) -> (Vec<Tool>, mcp::Handler) {
         // Apple Health tools do not need a ring summary.
         let tz_s = |snap: Option<&Value>| snap.and_then(|s| s["tz"].as_i64()).unwrap_or(0) * 3600;
         let watch = |snap: Option<&Value>| -> Result<Value, String> {
-            let rows = store_for_handler
+            // The last 7 days for totals and means, plus the newest row of every kind
+            // so a sparse vital (VO2 max is weekly at best) still has a "latest".
+            let mut rows = store_for_handler
                 .health_rows(None, now as f64 - 7.0 * 86400.0, 200_000)
                 .map_err(|e| format!("store error: {e}"))?;
+            let latest = store_for_handler.health_latest_per_kind().map_err(|e| format!("store error: {e}"))?;
+            for r in latest {
+                if !rows.iter().any(|x| x.uuid == r.uuid) {
+                    rows.push(r);
+                }
+            }
             Ok(health::watch_status(&rows, now, tz_s(snap)))
         };
         if name == "get_watch" {

@@ -18,28 +18,30 @@ struct SleepCard: View {
         NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
             VStack(alignment: .leading, spacing: 10) {
                 CardHeader(title: "Sleep", icon: "bed.double.fill", tint: Theme.sleep,
-                           detail: Fmt.dayLabel(day), chevron: true)
+                           detail: s.night(forDay: day).map { "\($0.start ?? "—") – \($0.end ?? "—")" },
+                           chevron: true)
                 if let n = s.night(forDay: day) {
-                    Text("Time in bed").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Time in Bed").font(.subheadline).foregroundStyle(.secondary)
                     BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")])
                     if n.hasHypnogram {
                         Hypnogram(stages: n.stages!, height: 34).padding(.top, 2)
                     }
-                    HStack(spacing: 6) {
-                        Text(n.start ?? "—")
-                        Image(systemName: "arrow.right").font(.caption2).accessibilityLabel("to")
-                        Text(n.end ?? "—")
-                        Spacer()
-                        if n.hasHypnogram, let e = n.efficiency {
-                            Text("\(Int(e))% efficiency")
+                    if n.hasHypnogram {
+                        HStack(spacing: 12) {
+                            ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct)], id: \.0) { code, pct in
+                                HStack(spacing: 4) {
+                                    Circle().fill(Theme.stage(code)).frame(width: 7, height: 7)
+                                    Text("\(Theme.stageName(code)) \(Int(pct ?? 0))%")
+                                }
+                            }
+                            Spacer()
+                            if let e = n.efficiency { Text("\(Int(e))% efficient") }
                         }
+                        .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                     }
-                    .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                 } else {
-                    Text("No sleep recorded")
-                        .font(.title3.weight(.semibold))
-                    Text("Wear the ring overnight and sync to see last night.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    EmptyCardState(icon: "moon.zzz", title: "No Sleep Yet",
+                                   text: "Wear your ring tonight. Tomorrow morning, last night will appear here.")
                 }
             }
             .card()
@@ -56,16 +58,20 @@ struct ActivityCard: View {
         let st = s.activity_daily[day]
         NavigationLink(value: Route.report(ReportSel(day: day, sleep: false))) {
             VStack(alignment: .leading, spacing: 10) {
-                CardHeader(title: "Activity", icon: "flame.fill", tint: Theme.activity,
-                           detail: Fmt.dayLabel(day), chevron: true)
-                HStack(alignment: .top, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Steps").font(.subheadline).foregroundStyle(.secondary)
-                        BigValue(Fmt.steps(st?.steps), "")
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Active energy").font(.subheadline).foregroundStyle(.secondary)
-                        BigValue(Fmt.number(st?.active_kcal), "kcal")
+                CardHeader(title: "Activity", icon: "flame.fill", tint: Theme.activity, chevron: true)
+                if st == nil && (s.activity_profile[day] ?? []).count < 2 {
+                    EmptyCardState(icon: "figure.walk", title: "No Movement Yet",
+                                   text: "Steps and active energy appear after the first sync of the day.")
+                } else {
+                    HStack(alignment: .top, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Steps").font(.subheadline).foregroundStyle(.secondary)
+                            BigValue(Fmt.steps(st?.steps), "")
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Active Energy").font(.subheadline).foregroundStyle(.secondary)
+                            BigValue(Fmt.number(st?.active_kcal), "kcal")
+                        }
                     }
                 }
                 let profile = s.activity_profile[day] ?? []
@@ -83,6 +89,56 @@ struct ActivityCard: View {
             .card()
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The one-line reading of the newest data, and the sync or analysis status while
+/// the ring or the on-device models are working. Cached content stays visible; the
+/// status is a line, not a spinner over the page.
+struct HighlightsCard: View {
+    let digest: String?
+    let status: String?
+    var body: some View {
+        if digest != nil || status != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                CardHeader(title: "Highlights", icon: "sparkles", tint: .accentColor)
+                if let status {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(status).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .transition(.opacity)
+                }
+                if let digest {
+                    Text(digest).font(.body)
+                }
+            }
+            .card()
+            .animation(.snappy, value: status)
+        }
+    }
+}
+
+/// An empty state inside a card: a symbol, a short title, one line of guidance.
+struct EmptyCardState: View {
+    let icon: String
+    let title: String
+    let text: String
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 36)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                Text(text).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -451,8 +507,8 @@ struct RootView: View {
     }
     private func latestLabel(date: String?, time: String? = nil) -> String {
         let day = date.map { Fmt.monthDay($0) }
-        let stamp = [day, time].compactMap { $0 }.joined(separator: " · ")
-        return stamp.isEmpty ? "Latest sync" : "Latest · \(stamp)"
+        let stamp = [day, time].compactMap { $0 }.joined(separator: ", ")
+        return stamp.isEmpty ? "Latest reading" : stamp
     }
 
     var body: some View {
@@ -468,15 +524,6 @@ struct RootView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Summary")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if ring.busy || isRefreshingSummary {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text(modelProgress.label ?? "Updating").font(.footnote).foregroundStyle(.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
-                    }
-                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     SyncIndicatorButton(ring: ring) { showSync = true }
                     Button { showProfile = true } label: {
@@ -644,24 +691,17 @@ struct RootView: View {
             let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    // digest headline
-                    if let d = s.digest {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "sparkles")
-                                .foregroundStyle(Color.accentColor)
-                                .accessibilityHidden(true)
-                            Text(d).font(.body)
-                        }
-                        .card()
-                    }
+                    // highlights: the digest line, and the sync / analysis status while
+                    // the ring or the models are working (HIG: describe the work, not the wait)
+                    HighlightsCard(digest: s.digest,
+                                   status: ring.busy ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
+                                       : (isRefreshingSummary ? (modelProgress.label.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Updating your summary…") : nil))
 
                     // today — last night's sleep + that day's activity as one unit,
                     // the hero of the home; tap either card for its report.
                     if let day = s.days.first {
                         SectionTitle(Fmt.dayLabel(day))
-                        if s.scores?.days.isEmpty == false {
-                            ScoresCard(s: s, day: day)
-                        }
+                        ScoresCard(s: s, day: day)
                         SleepCard(s: s, day: day)
                         ActivityCard(s: s, day: day)
                     }

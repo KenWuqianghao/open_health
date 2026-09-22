@@ -783,7 +783,7 @@ struct SleepReport: View {
                            detail: "\(n.start ?? "—") – \(n.end ?? "—")")
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("In bed").font(.caption).foregroundStyle(.secondary)
+                        Text("In Bed").font(.caption).foregroundStyle(.secondary)
                         BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")], style: .title2)
                     }
                     if let a = asleepH {

@@ -313,6 +313,14 @@ enum VitalKind: String, Identifiable, CaseIterable {
         case .oxygen: return "%"
         }
     }
+    /// What fills the card, for the empty state.
+    var emptyHint: String {
+        switch self {
+        case .hrv, .heartRate: return "Measured while you sleep"
+        case .temp: return "Measured while you sleep"
+        case .oxygen: return "Needs blood oxygen sensing on"
+        }
+    }
     var caption: String {
         switch self {
         case .hrv: return "RMSSD from the longest sleep of each morning"

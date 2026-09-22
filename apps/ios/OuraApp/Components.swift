@@ -311,18 +311,23 @@ struct VitalCell: View {
         let tone = Theme.tone(delta: delta, goodWhenPositive: kind.goodWhenPositive)
         NavigationLink(value: Route.vital(kind)) {
             VStack(alignment: .leading, spacing: 8) {
-                CardHeader(title: kind.shortTitle, icon: kind.icon, tint: kind.tint, chevron: true)
-                BigValue(value, kind.unit, style: .title2)
-                Group {
-                    if let d = delta {
-                        Text("\(d >= 0 ? "+" : "")\(Int(d.rounded()))% vs baseline")
-                            .foregroundStyle(tone)
-                    } else if let detail {
-                        Text(detail).foregroundStyle(.secondary)
+                CardHeader(title: kind.shortTitle, icon: kind.icon, tint: kind.tint, chevron: hasValue)
+                if hasValue {
+                    BigValue(value, kind.unit, style: .title2)
+                    Group {
+                        if let d = delta {
+                            Text("\(d >= 0 ? "+" : "")\(Int(d.rounded()))% vs baseline")
+                                .foregroundStyle(tone)
+                        } else if let detail {
+                            Text(detail).foregroundStyle(.secondary)
+                        }
                     }
+                    .font(.caption)
+                    .lineLimit(1)
+                } else {
+                    Text("No Data").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(kind.emptyHint).font(.caption).foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .lineLimit(1)
                 if series.count > 1 {
                     Spacer(minLength: 2)
                     Sparkline(series: series, accent: kind.tint, baseline: baseline)
@@ -331,10 +336,12 @@ struct VitalCell: View {
             .card(fillHeight: true)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(kind.title) \(value) \(kind.unit)")
+        .disabled(!hasValue)
+        .accessibilityLabel(hasValue ? "\(kind.title) \(value) \(kind.unit)" : "\(kind.title), no data")
         .accessibilityHint("Shows the trend over time")
         .accessibilityIdentifier("vital-\(kind.rawValue)")
     }
+    private var hasValue: Bool { value != "—" && !value.isEmpty }
 }
 
 enum VitalPeriod: String, CaseIterable, Identifiable {
@@ -664,7 +671,8 @@ struct ScoresCard: View {
                                     .font(.caption)
                                     .foregroundStyle(hit.day == day ? band.color : .secondary)
                             } else {
-                                Text("No data").font(.caption).foregroundStyle(.secondary)
+                                Text(kind == .activity ? "Tracking today" : "After a night")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -676,8 +684,11 @@ struct ScoresCard: View {
                     .accessibilityHint("Shows the breakdown")
                 }
             }
-            if found.contains(where: { $0.1?.score.provisional == true }) {
-                Label("Dotted scores are provisional: a baseline is still maturing or the day is not over.",
+            if found.allSatisfy({ $0.1 == nil }) {
+                Text("Your scores start after the first night with your ring on.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if found.contains(where: { $0.1?.score.provisional == true }) {
+                Label("Scores marked with a dotted ring are early estimates. They settle after about two weeks of nights.",
                       systemImage: "circle.dotted")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -708,7 +719,7 @@ struct ScoreDetailView: View {
                             .font(.headline)
                             .foregroundStyle(band.color)
                         if score.provisional {
-                            Label("Provisional", systemImage: "circle.dotted")
+                            Label("Early estimate", systemImage: "circle.dotted")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } else {

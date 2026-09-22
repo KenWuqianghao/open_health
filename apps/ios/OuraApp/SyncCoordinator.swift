@@ -446,7 +446,10 @@ actor SyncCoordinator {
         UserDefaults.standard.set(true, forKey: Self.syncIncompleteKey)
     }
 
-    private func record(_ m: SyncMetrics) {
+    private func record(_ metrics: SyncMetrics) {
+        var m = metrics
+        // A run that never reached a report leaves the cursor where it was.
+        if m.cursorAfter == 0 { m.cursorAfter = m.cursorBefore }
         dlog("sync-metrics", m.line)
         let all = SyncHistoryStore.append(m)
         Task { await RingSync.shared.set(history: all) }

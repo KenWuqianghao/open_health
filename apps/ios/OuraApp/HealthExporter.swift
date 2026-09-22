@@ -64,7 +64,7 @@ actor HealthExportEngine {
     private let client: HealthStoreClient
     private let now: @Sendable () -> Date
 
-    init(client: HealthStoreClient, now: @escaping @Sendable () -> Date = Date.init) {
+    init(client: HealthStoreClient, now: @escaping @Sendable () -> Date = { Date() }) {
         self.client = client
         self.now = now
     }

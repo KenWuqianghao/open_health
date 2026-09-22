@@ -156,12 +156,13 @@ enum SyncHistoryStore {
 @MainActor
 enum KeepAlive {
     static func begin(_ name: String) -> UIBackgroundTaskIdentifier {
-        var id = UIBackgroundTaskIdentifier.invalid
-        id = UIApplication.shared.beginBackgroundTask(withName: name) {
+        final class Cell: @unchecked Sendable { var id = UIBackgroundTaskIdentifier.invalid }
+        let cell = Cell()
+        cell.id = UIApplication.shared.beginBackgroundTask(withName: name) {
             dlog("bg", "background task '\(name)' expired (remaining \(Int(UIApplication.shared.backgroundTimeRemaining))s)")
-            UIApplication.shared.endBackgroundTask(id)
+            UIApplication.shared.endBackgroundTask(cell.id)
         }
-        return id
+        return cell.id
     }
     static func end(_ id: UIBackgroundTaskIdentifier) {
         guard id != .invalid else { return }
@@ -469,17 +470,20 @@ actor SyncCoordinator {
     private func acquireLink(_ policy: SyncPolicy, trigger: SyncTrigger) async throws -> BLETransport {
         let central = RingCentral.shared
         try await central.waitPoweredOn()
-        if let held = central.systemConnectedRing(), !central.ownsLink {
-            dlog("sync", "another app on this phone holds the ring (\(held.identifier.uuidString.suffix(12)))")
-            await RingSync.shared.set(otherAppHoldsRing: true)
-            throw BLEError.busy
-        }
-        await RingSync.shared.set(otherAppHoldsRing: false)
         // A parked link needs no connect at all.
         if let parked = central.parkedPeripheral, parked.state == .connected {
             dlog("sync", "using the parked link")
             return central.claim(parked, for: trigger)
         }
+        if let held = central.systemConnectedRing() {
+            dlog("sync", "another app on this phone holds the ring (\(held.identifier.uuidString.suffix(12)))")
+            await RingSync.shared.set(otherAppHoldsRing: true)
+            throw BLEError.busy
+        }
+        await RingSync.shared.set(otherAppHoldsRing: false)
+        // The armed wait (pending connect + filtered scan) must not race the connect
+        // below; `release` arms again after the run.
+        if central.isArmed { central.disarm() }
         let peripheral: CBPeripheral
         switch policy.connect {
         case .reuse, .known:
@@ -489,7 +493,9 @@ actor SyncCoordinator {
         case .knownThenScan(let scanTimeout, let mode):
             if let p = central.pairedPeripheral() {
                 do {
-                    try await central.connect(p, timeout: policy.connectTimeout)
+                    // The ring rotates its address, so the known identifier is often
+                    // stale: give it a short try, then scan.
+                    try await central.connect(p, timeout: min(policy.connectTimeout, 6))
                     peripheral = p
                     break
                 } catch {

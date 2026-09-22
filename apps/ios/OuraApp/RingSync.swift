@@ -409,7 +409,9 @@ final class RingSync: ObservableObject {
             if let hint = BLEErrorHint.text(inDetail: detail) { status = hint; return }
             switch (trigger, exit) {
             case (_, .authRejected): break // status already set
-            case (_, .heldByOtherApp), (_, .connectFailed) where otherAppHoldsRing:
+            case (_, .heldByOtherApp):
+                status = "another app on this phone holds the ring — remove the official Oura app or turn off its Bluetooth permission"
+            case (_, .connectFailed) where otherAppHoldsRing:
                 status = "another app on this phone holds the ring — remove the official Oura app or turn off its Bluetooth permission"
             case (_, .bluetoothOff):
                 status = "Bluetooth is off or not allowed for Open Oura"

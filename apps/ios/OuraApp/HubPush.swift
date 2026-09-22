@@ -192,6 +192,7 @@ struct HubPushStatus: Equatable {
     var running = false
     var lastSummaryAt: Date?
     var lastEventsAt: Date?
+    var lastHealthAt: Date?
     var lastError: String?
 }
 
@@ -222,12 +223,13 @@ final class HubPusher: ObservableObject {
         enabled && hasToken && HubSettings.endpoint(base: url, path: "ingest/summary") != nil
     }
 
-    private func targets() throws -> (summary: URL, events: URL, token: String) {
+    private func targets() throws -> (summary: URL, events: URL, health: URL, token: String) {
         guard enabled else { throw HubError.notConfigured }
         guard let s = HubSettings.endpoint(base: url, path: "ingest/summary"),
-              let e = HubSettings.endpoint(base: url, path: "ingest/events") else { throw HubError.badURL }
+              let e = HubSettings.endpoint(base: url, path: "ingest/events"),
+              let h = HubSettings.endpoint(base: url, path: "ingest/health") else { throw HubError.badURL }
         guard let token = HubSettings.token, !token.isEmpty else { throw HubError.noToken }
-        return (s, e, token)
+        return (s, e, h, token)
     }
 
     private func update(_ change: @escaping (inout HubPushStatus) -> Void) async {
@@ -248,8 +250,10 @@ final class HubPusher: ObservableObject {
         if let rawJson {
             await pushSummary(rawJson: rawJson, models: models, reason: reason, timeout: min(deadline, 20))
         }
-        let left = deadline - Date().timeIntervalSince(start)
+        var left = deadline - Date().timeIntervalSince(start)
         if left > 2 { await pushEvents(reason: reason, deadline: left) }
+        left = deadline - Date().timeIntervalSince(start)
+        if left > 2 { await pushHealth(reason: reason, deadline: left) }
     }
 
     /// Fire-and-forget from the UI thread or a dispatch queue.
@@ -275,7 +279,7 @@ final class HubPusher: ObservableObject {
 
     @discardableResult
     func pushSummary(rawJson: String, models: Summary?, reason: String, timeout: TimeInterval) async -> Bool {
-        let t: (summary: URL, events: URL, token: String)
+        let t: (summary: URL, events: URL, health: URL, token: String)
         do { t = try targets() } catch { await fail(error, "summary"); return false }
         let body: Data
         do { body = try HubPayload.build(rawJson: rawJson, models: models) } catch { await fail(error, "summary"); return false }
@@ -303,7 +307,7 @@ final class HubPusher: ObservableObject {
     func pushEvents(reason: String, deadline: TimeInterval) async -> Bool {
         // Never send the bundled seed database: only a store this phone synced.
         guard FileManager.default.fileExists(atPath: DB.url.path) else { return true }
-        let t: (summary: URL, events: URL, token: String)
+        let t: (summary: URL, events: URL, health: URL, token: String)
         do { t = try targets() } catch { await fail(error, "events"); return false }
         let start = Date()
         var events = 0, readings = 0, pages = 0
@@ -332,6 +336,34 @@ final class HubPusher: ObservableObject {
             dlog("hub", "events sent: \(events) events, \(readings) readings in \(pages) page(s), through id \(HubSettings.afterEventId) (\(reason))")
         }
         await update { $0.running = false; if pages > 0 { $0.lastEventsAt = Date() } }
+        return true
+    }
+
+    /// Apple Health samples (the Watch) that changed since the last run, in pages.
+    /// The reader keeps its own anchors; `deadline` bounds the whole walk.
+    @discardableResult
+    func pushHealth(reason: String, deadline: TimeInterval) async -> Bool {
+        let reader = HealthReader.shared
+        guard reader.enabled, reader.isAvailable else { return true }
+        let t: (summary: URL, events: URL, health: URL, token: String)
+        do { t = try targets() } catch { await fail(error, "health"); return false }
+        await update { $0.running = true; $0.lastError = nil }
+        let tz = TimeZone.current.secondsFromGMT()
+        let start = Date()
+        let outcome = await reader.engine.run(types: HealthReadTypes.all, deadline: deadline, tzOffsetS: tz) { body in
+            let data = try JSONSerialization.data(withJSONObject: body)
+            let left = max(5, min(20, deadline - Date().timeIntervalSince(start)))
+            _ = try await HubPushEngine.send(body: data, url: t.health, token: t.token, timeout: left)
+        }
+        await reader.record(outcome)
+        if let e = outcome.error {
+            await fail(HubError.payload(e), "health")
+            return false
+        }
+        if outcome.pages > 0 {
+            dlog("hub", "health sent: \(outcome.samples) samples, \(outcome.deleted) deletions in \(outcome.pages) page(s)\(outcome.hitDeadline ? ", deadline hit" : "") (\(reason))")
+        }
+        await update { $0.running = false; if outcome.pages > 0 { $0.lastHealthAt = Date() } }
         return true
     }
 }

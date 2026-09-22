@@ -9,6 +9,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::health::{HealthBatch, HealthOutcome, HealthSample};
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -38,6 +40,22 @@ CREATE TABLE IF NOT EXISTS snapshots (
     body TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS snapshots_received ON snapshots(received_at);
+CREATE TABLE IF NOT EXISTS health_samples (
+    uuid TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    start_unix REAL NOT NULL,
+    end_unix REAL NOT NULL,
+    value REAL,
+    unit TEXT,
+    category TEXT,
+    source_bundle TEXT,
+    source_name TEXT,
+    device TEXT,
+    metadata TEXT,
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS health_kind_start ON health_samples(kind, start_unix);
+CREATE INDEX IF NOT EXISTS health_end ON health_samples(end_unix);
 ";
 
 impl Store {
@@ -93,6 +111,64 @@ impl Store {
         Ok(conn.query_row("SELECT COUNT(*) FROM snapshots", [], |r| r.get(0))?)
     }
 
+    /// Upsert Apple Health samples by UUID and apply the deletions.
+    pub fn put_health(&self, batch: &HealthBatch, received_at: i64) -> Result<HealthOutcome> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut out = HealthOutcome { samples_seen: batch.samples.len(), ..Default::default() };
+        for s in &batch.samples {
+            let metadata = s.metadata.as_ref().map(|m| m.to_string());
+            out.stored += tx.execute(
+                "INSERT OR REPLACE INTO health_samples
+                   (uuid, kind, start_unix, end_unix, value, unit, category, source_bundle, source_name, device, metadata, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![s.uuid, s.kind, s.start_unix, s.end_unix, s.value, s.unit, s.category,
+                        s.source_bundle, s.source_name, s.device, metadata, received_at],
+            )?;
+        }
+        for uuid in &batch.deleted {
+            out.deleted += tx.execute("DELETE FROM health_samples WHERE uuid = ?1", params![uuid])?;
+        }
+        tx.commit()?;
+        out.total = conn.query_row("SELECT COUNT(*) FROM health_samples", [], |r| r.get(0))?;
+        Ok(out)
+    }
+
+    /// Samples of one kind (or all kinds) that end at or after `since_unix`, newest first.
+    pub fn health_rows(&self, kind: Option<&str>, since_unix: f64, limit: usize) -> Result<Vec<HealthSample>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT uuid, kind, start_unix, end_unix, value, unit, category, source_bundle, source_name, device, metadata
+             FROM health_samples WHERE end_unix >= ?1 {} ORDER BY end_unix DESC LIMIT ?2",
+            if kind.is_some() { "AND kind = ?3" } else { "" }
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let map = |r: &rusqlite::Row| -> rusqlite::Result<HealthSample> {
+            let metadata: Option<String> = r.get(10)?;
+            Ok(HealthSample {
+                uuid: r.get(0)?, kind: r.get(1)?, start_unix: r.get(2)?, end_unix: r.get(3)?,
+                value: r.get(4)?, unit: r.get(5)?, category: r.get(6)?, source_bundle: r.get(7)?,
+                source_name: r.get(8)?, device: r.get(9)?,
+                metadata: metadata.and_then(|m| serde_json::from_str(&m).ok()),
+            })
+        };
+        let rows = match kind {
+            Some(k) => stmt.query_map(params![since_unix, limit as i64, k], map)?.collect::<std::result::Result<Vec<_>, _>>()?,
+            None => stmt.query_map(params![since_unix, limit as i64], map)?.collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    /// `(kind, count, newest end_unix)` per kind.
+    pub fn health_kinds(&self) -> Result<Vec<(String, i64, f64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT kind, COUNT(*), MAX(end_unix) FROM health_samples GROUP BY kind ORDER BY kind")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Keep only the newest `keep` snapshots. Returns the number removed.
     pub fn prune(&self, keep: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
@@ -107,6 +183,7 @@ impl Store {
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::health::{HealthBatch, HealthSample};
 
     #[test]
     fn put_latest_and_dedup() {
@@ -124,6 +201,27 @@ mod tests {
         assert_eq!(latest.received_at, 102);
         assert_eq!(latest.generated_at, Some(20.0));
         assert_eq!(latest.body["generated_at"], 20.0);
+    }
+
+    #[test]
+    fn health_upsert_query_and_delete() {
+        let s = Store::in_memory().unwrap();
+        let sample = |uuid: &str, kind: &str, end: f64| HealthSample {
+            uuid: uuid.into(), kind: kind.into(), start_unix: end - 60.0, end_unix: end, value: Some(1.0),
+            unit: None, category: None, source_bundle: None, source_name: None, device: None,
+            metadata: Some(json!({ "k": 1 })),
+        };
+        let batch = HealthBatch { tz_offset_s: None, samples: vec![sample("a", "heart_rate", 100.0), sample("b", "step_count", 200.0)], deleted: vec![] };
+        let out = s.put_health(&batch, 1).unwrap();
+        assert_eq!((out.samples_seen, out.stored, out.total), (2, 2, 2));
+        let again = HealthBatch { tz_offset_s: None, samples: vec![sample("a", "heart_rate", 100.0)], deleted: vec!["b".into(), "zzz".into()] };
+        let out = s.put_health(&again, 2).unwrap();
+        assert_eq!((out.stored, out.deleted, out.total), (1, 1, 1));
+        let rows = s.health_rows(Some("heart_rate"), 0.0, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].metadata, Some(json!({ "k": 1 })));
+        assert!(s.health_rows(None, 150.0, 10).unwrap().is_empty());
+        assert_eq!(s.health_kinds().unwrap(), vec![("heart_rate".to_string(), 1, 100.0)]);
     }
 
     #[test]

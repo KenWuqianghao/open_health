@@ -100,6 +100,7 @@ struct ProfileSettingsView: View {
     @ObservedObject private var health = HealthExporter.shared
     @ObservedObject private var ring = RingSync.shared
     @ObservedObject private var hub = HubPusher.shared
+    @ObservedObject private var healthRead = HealthReader.shared
     @State private var hubToken: String = HubSettings.token ?? ""
     @State private var showPairing = false
     @State private var revealKey = false
@@ -125,6 +126,8 @@ struct ProfileSettingsView: View {
         var parts: [String] = []
         if let t = hub.status.lastSummaryAt { parts.append("summary \(Self.when.string(from: t))") }
         if let t = hub.status.lastEventsAt { parts.append("ring rows \(Self.when.string(from: t)), through id \(HubSettings.afterEventId)") }
+        if healthRead.enabled, let t = healthRead.status.lastSuccessAt { parts.append("Apple Health \(Self.when.string(from: t)), \(healthRead.status.samplesSent) samples") }
+        if healthRead.enabled, let e = healthRead.status.lastError { parts.append("Apple Health error: \(e)") }
         if let e = hub.status.lastError { parts.append("error: \(e)") }
         return parts.isEmpty ? "Nothing sent yet." : parts.joined(separator: " · ")
     }
@@ -278,6 +281,10 @@ struct ProfileSettingsView: View {
                             .autocorrectionDisabled()
                         SecureField("Token", text: $hubToken)
                             .onChange(of: hubToken) { _, value in hub.setToken(value) }
+                        Toggle("Include Apple Health data (Watch)", isOn: Binding(
+                            get: { healthRead.enabled },
+                            set: { on in Task { await healthRead.setEnabled(on) } }
+                        ))
                         Button { hub.pushNow() } label: {
                             HStack {
                                 Label(hub.status.running ? "Sending…" : "Send Now", systemImage: "icloud.and.arrow.up")
@@ -293,7 +300,7 @@ struct ProfileSettingsView: View {
                 } header: {
                     Text("Health hub")
                 } footer: {
-                    Text("After each sync the app sends the summary and every new ring event to your own server (oura-hub). An agent can read your status, and the raw data is backed up, while this iPhone is off. The token is kept in the Keychain.")
+                    Text("After each sync the app sends the summary and every new ring event to your own server (oura-hub). With Apple Health on, it also sends the samples other apps and your Apple Watch wrote (never its own export). An agent can read your status, and the data is backed up, while this iPhone is off. The token is kept in the Keychain.")
                 }
             }
             .fullScreenCover(isPresented: $showPairing) { PairingView(onPaired: { _ in }) }

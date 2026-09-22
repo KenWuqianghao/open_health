@@ -20,7 +20,7 @@ enum AppHooks {
     private static func afterSync(trigger: SyncTrigger, report: SyncReport?, policy: SyncPolicy) async {
         // 1. File protection: the DB must stay readable after the first unlock so a
         //    background sync on a locked phone can write to it.
-        for name in ["oura.db", "oura.db-wal", "oura.db-shm", "summary-cache.json", "health-export-state.json"] {
+        for name in ["oura.db", "oura.db-wal", "oura.db-shm", "summary-cache.json", "health-export-state.json", "health-read-state.json"] {
             let url = DB.url.deletingLastPathComponent().appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             try? FileManager.default.setAttributes(

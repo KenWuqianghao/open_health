@@ -7,6 +7,7 @@
 //! the ring data: `oura dashboard --db` runs on it, and `GET /export/events` gives
 //! the rows back. The process holds no state outside the two files.
 
+pub mod health;
 pub mod mcp;
 pub mod store;
 
@@ -21,6 +22,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
+use health::HealthBatch;
 use mcp::{Reply, Server, Tool};
 use oura_store::replication::ExportBatch;
 use store::Store;
@@ -92,6 +94,20 @@ pub fn tools(store_for_handler: Arc<Store>) -> (Vec<Tool>, mcp::Handler) {
             }, "required": ["metric"], "additionalProperties": false }),
         },
         Tool {
+            name: "get_watch",
+            description: "Apple Health data pushed from the iPhone, mostly from the Apple Watch: today's and yesterday's steps, active energy, exercise and stand minutes, stand hours; latest heart rate, resting heart rate, HRV (SDNN), VO2 max, respiratory rate, blood oxygen, wrist temperature; the last sleep with stages; workouts in the last 48 h; freshness.",
+            input_schema: json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        },
+        Tool {
+            name: "get_health_samples",
+            description: "Raw Apple Health samples of one kind, newest first. Kinds: heart_rate, resting_heart_rate, hrv_sdnn, walking_heart_rate_average, vo2_max, step_count, active_energy, basal_energy, exercise_time, stand_time, stand_hour, distance_walking_running, respiratory_rate, oxygen_saturation, wrist_temperature, sleep_analysis, workout.",
+            input_schema: json!({ "type": "object", "properties": {
+                "kind": { "type": "string", "description": "Which kind to return." },
+                "days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 7 },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 }
+            }, "required": ["kind"], "additionalProperties": false }),
+        },
+        Tool {
             name: "get_activity",
             description: "Recent days, newest first: steps, active kcal, total kcal, walking distance.",
             input_schema: json!({ "type": "object", "properties": {
@@ -100,14 +116,39 @@ pub fn tools(store_for_handler: Arc<Store>) -> (Vec<Tool>, mcp::Handler) {
         },
     ];
     let handler: mcp::Handler = Arc::new(move |name, args| {
+        let days = |default: u64| args["days"].as_u64().unwrap_or(default).clamp(1, 365) as usize;
+        let now = now_unix();
+        // Apple Health tools do not need a ring summary.
+        let tz_s = |snap: Option<&Value>| snap.and_then(|s| s["tz"].as_i64()).unwrap_or(0) * 3600;
+        let watch = |snap: Option<&Value>| -> Result<Value, String> {
+            let rows = store_for_handler
+                .health_rows(None, now as f64 - 7.0 * 86400.0, 200_000)
+                .map_err(|e| format!("store error: {e}"))?;
+            Ok(health::watch_status(&rows, now, tz_s(snap)))
+        };
+        if name == "get_watch" {
+            let snap = store_for_handler.latest().map_err(|e| format!("store error: {e}"))?;
+            return watch(snap.as_ref().map(|s| &s.body));
+        }
+        if name == "get_health_samples" {
+            let kind = args["kind"].as_str().ok_or("kind is required")?;
+            let limit = args["limit"].as_u64().unwrap_or(500).clamp(1, 5000) as usize;
+            let rows = store_for_handler
+                .health_rows(Some(kind), now as f64 - days(7) as f64 * 86400.0, limit)
+                .map_err(|e| format!("store error: {e}"))?;
+            return Ok(json!({ "kind": kind, "count": rows.len(), "samples": rows }));
+        }
         let snap = store_for_handler
             .latest()
             .map_err(|e| format!("store error: {e}"))?
             .ok_or_else(|| "no health data yet: nothing has been pushed to this hub".to_string())?;
-        let days = |default: u64| args["days"].as_u64().unwrap_or(default).clamp(1, 365) as usize;
         let s = &snap.body;
         match name {
-            "get_status_now" => Ok(oura_summary::agent::status_now(s, now_unix())),
+            "get_status_now" => {
+                let mut status = oura_summary::agent::status_now(s, now);
+                status["watch"] = watch(Some(s))?;
+                Ok(status)
+            }
             "get_sleep" => Ok(oura_summary::agent::sleep_nights(s, days(7))),
             "get_trends" => {
                 let metric = args["metric"].as_str().ok_or("metric is required")?;
@@ -142,6 +183,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/ingest/summary", post(ingest))
         .route("/ingest/events", post(ingest_events))
+        .route("/ingest/health", post(ingest_health))
         .route("/export/events", get(export_events))
         .route("/mcp", post(mcp_bearer).get(mcp_no_stream).delete(mcp_no_stream))
         .route("/mcp/{token}", post(mcp_path).get(mcp_no_stream).delete(mcp_no_stream))
@@ -165,8 +207,26 @@ async fn health(State(st): State<Arc<AppState>>) -> Response {
             "max_event_id": ring_ids.0,
             "max_reading_id": ring_ids.1,
         },
+        "health": st.store.health_kinds().unwrap_or_default().iter().map(|(k, n, newest)| {
+            json!({ "kind": k, "count": n, "newest_end_unix": *newest as i64 })
+        }).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+/// Apple Health samples from the phone. Upsert by UUID; deletions applied.
+async fn ingest_health(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+    if !bearer(&headers).is_some_and(|t| token_matches(t, &st.token)) {
+        return unauthorized();
+    }
+    let batch: HealthBatch = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("invalid health batch: {e}") }))).into_response(),
+    };
+    match st.store.put_health(&batch, now_unix()) {
+        Ok(out) => Json(serde_json::to_value(out).unwrap_or(Value::Null)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
 }
 
 /// Raw rows from a phone or desktop store. Idempotent: the replica keeps its own

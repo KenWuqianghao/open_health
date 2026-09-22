@@ -102,7 +102,7 @@ async fn ingest_then_health_then_tools() {
 
     let (_, r) = send(&app, post(&uri, None, rpc(2, "tools/list", json!({})))).await;
     let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["get_status_now", "get_sleep", "get_trends", "get_activity"]);
+    assert_eq!(names, ["get_status_now", "get_sleep", "get_trends", "get_watch", "get_health_samples", "get_activity"]);
 
     let (_, r) = send(&app, post(&uri, None, rpc(3, "tools/call", json!({ "name": "get_status_now", "arguments": {} })))).await;
     assert_eq!(r["result"]["isError"], false, "{r}");
@@ -184,4 +184,54 @@ async fn ring_rows_round_trip_through_the_replica() {
     let (s, e) = send(&app, post("/ingest/events", Some(TOKEN), newer)).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(e["error"].as_str().unwrap().contains("newer"));
+}
+
+#[tokio::test]
+async fn health_samples_round_trip_and_fold_into_status() {
+    let app = app();
+    let now = oura_hub::now_unix() as f64;
+    let batch = json!({
+        "tz_offset_s": 0,
+        "samples": [
+            { "uuid": "h1", "kind": "heart_rate", "start_unix": now - 300.0, "end_unix": now - 300.0, "value": 61.0, "unit": "count/min",
+              "source_bundle": "com.apple.health", "source_name": "Ken's Apple Watch", "device": "Watch7,1" },
+            { "uuid": "s1", "kind": "step_count", "start_unix": now - 3600.0, "end_unix": now - 3000.0, "value": 1234.0, "unit": "count",
+              "source_bundle": "com.apple.health", "source_name": "Ken's Apple Watch" },
+            { "uuid": "w1", "kind": "workout", "start_unix": now - 7200.0, "end_unix": now - 5400.0, "value": 30.0, "unit": "min",
+              "category": "cycling", "source_name": "Ken's Apple Watch", "metadata": { "total_energy_kcal": 300.0 } }
+        ],
+        "deleted": []
+    });
+    let (s, _) = send(&app, post("/ingest/health", None, batch.clone())).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, out) = send(&app, post("/ingest/health", Some(TOKEN), batch.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["stored"], 3);
+    assert_eq!(out["total"], 3);
+
+    let uri = format!("/mcp/{TOKEN}");
+    // the watch tools work without a ring summary
+    let (_, r) = send(&app, post(&uri, None, rpc(1, "tools/call", json!({ "name": "get_watch", "arguments": {} })))).await;
+    let w = &r["result"]["structuredContent"];
+    assert_eq!(w["available"], true, "{r}");
+    assert_eq!(w["today"]["steps"], 1234.0);
+    assert_eq!(w["heart_rate_latest"]["value"], 61.0);
+    assert_eq!(w["workouts_48h"][0]["activity"], "cycling");
+    assert_eq!(w["workouts_48h"][0]["kcal"], 300.0);
+
+    let (_, r) = send(&app, post(&uri, None, rpc(2, "tools/call", json!({ "name": "get_health_samples", "arguments": { "kind": "heart_rate", "days": 1 } })))).await;
+    assert_eq!(r["result"]["structuredContent"]["count"], 1);
+    assert_eq!(r["result"]["structuredContent"]["samples"][0]["uuid"], "h1");
+
+    // after a ring summary the status carries a watch block
+    let (_, _) = send(&app, post("/ingest/summary", Some(TOKEN), summary())).await;
+    let (_, r) = send(&app, post(&uri, None, rpc(3, "tools/call", json!({ "name": "get_status_now", "arguments": {} })))).await;
+    assert_eq!(r["result"]["structuredContent"]["watch"]["today"]["steps"], 1234.0);
+
+    // deletion
+    let del = json!({ "samples": [], "deleted": ["h1"] });
+    let (_, out) = send(&app, post("/ingest/health", Some(TOKEN), del)).await;
+    assert_eq!(out["deleted"], 1);
+    let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    assert_eq!(h["health"].as_array().unwrap().len(), 2);
 }

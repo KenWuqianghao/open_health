@@ -17,10 +17,11 @@ link with the client that syncs it.
 
 | Part | Where | Job |
 | --- | --- | --- |
-| `oura-hub` | `crates/oura-hub` | HTTP server: `/ingest/summary`, `/ingest/events`, `/export/events`, `/mcp`, `/health` |
+| `oura-hub` | `crates/oura-hub` | HTTP server: `/ingest/summary`, `/ingest/events`, `/ingest/health`, `/export/events`, `/mcp`, `/health` |
 | `oura-summary::agent` | `crates/oura-summary/src/agent.rs` | Turns the full summary into the short documents the tools return |
 | `oura-store::replication` | open_oura | `export_after` / `import_batch`: raw rows in pages, idempotent |
 | iOS `HubPush.swift` | `apps/ios/OuraApp` | Pushes the summary and the new rows after each sync |
+| iOS `HealthReader.swift` | `apps/ios/OuraApp` | Reads Apple Health samples with anchored queries and pushes the changes |
 | `oura push` | `crates/oura-cli` | Builds the summary on the Mac and pushes it |
 
 ## Run the hub
@@ -130,6 +131,35 @@ once. **Send All Ring Data Again** resets the ids, for a new hub.
 The token is kept in the Keychain and is readable after the first unlock, so a
 background sync on a locked phone can push.
 
+## Apple Health (Apple Watch)
+
+Settings → Health hub → **Include Apple Health data (Watch)**. iOS asks for read
+access once. After that, every push also sends the Apple Health samples that changed
+since the last run, deletions included. The app uses anchored HealthKit queries and
+keeps the anchors in `health-read-state.json` next to the database, so a run that
+stops early sends the rest next time.
+
+What is read: heart rate, resting heart rate, walking heart rate average, HRV
+(SDNN), VO2 max, steps, active and resting energy, exercise and stand minutes,
+stand hours, walking and running distance, respiratory rate, blood oxygen, wrist
+temperature, sleep analysis (with stages), and workouts (with energy and distance).
+
+What is never sent: the samples this app wrote itself (the Health export). The hub
+already has that data from the ring, and sending it back would count it twice.
+Samples from every other source go out, with the source name and the device model,
+so the hub can tell the Watch from the iPhone or another app.
+
+The hub keeps them in `hub.db` (`health_samples`, one row per sample UUID). Two tools
+read them:
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `get_watch` | none | Today and yesterday totals (best single source per day, so iPhone and Watch steps are not added together), latest heart rate, resting heart rate, HRV with a 7-day mean, VO2 max, respiratory rate, blood oxygen, wrist temperature, the last sleep with stages, workouts in the last 48 h, freshness |
+| `get_health_samples` | `kind`, `days` (default 7), `limit` (default 500) | Raw samples of one kind, newest first |
+
+`get_status_now` carries the same picture under `watch`, so one call gives the ring
+and the Watch together.
+
 ## Push from the Mac
 
 From the Mac that has `oura.db`:
@@ -202,6 +232,8 @@ curl -s https://hub.example.com/mcp/<token> -H 'content-type: application/json' 
 | `get_sleep` | `days` (default 7) | Recent nights, newest first, without the per-epoch series |
 | `get_trends` | `metric`, `days` (default 14) | One value per day, oldest first, with latest, mean, and baseline |
 | `get_activity` | `days` (default 7) | Steps, active kcal, total kcal, distance per day |
+| `get_watch` | none | The Apple Health picture (see above) |
+| `get_health_samples` | `kind`, `days`, `limit` | Raw Apple Health samples of one kind |
 
 Metrics for `get_trends`: `hrv_ms`, `rhr`, `skin_temp`, `efficiency`, `in_bed_h`,
 `asleep_min`, `deep_pct`, `rem_pct`, `light_pct`, `wake_pct`, `awakenings`,
@@ -220,6 +252,5 @@ Give the agent a daily trigger and a prompt like this:
 
 ## Next steps
 
-1. The iOS app reads Apple Watch samples from HealthKit and adds them to the push.
-2. HealthKit background delivery pushes within minutes of new Watch data.
-3. The hub builds the summary from its own replica when no summary was pushed.
+1. HealthKit background delivery pushes within minutes of new Watch data.
+2. The hub builds the summary from its own replica when no summary was pushed.

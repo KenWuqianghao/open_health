@@ -860,9 +860,9 @@ body.page-open { overflow: hidden; }
 .score:hover { border-color: var(--hover-line); background: var(--hover-fill); }
 .score:disabled { cursor: default; opacity: 0.6; }
 .score svg { width: 92px; height: 92px; }
-.score .ring-track { fill: none; stroke: color-mix(in oklab, var(--score-tint) 18%, transparent); stroke-width: 9; }
-.score .ring-fill { fill: none; stroke: var(--score-tint); stroke-width: 9; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dasharray 400ms ease; }
-.score .ring-num { font-family: var(--sans); font-weight: 650; font-size: 26px; fill: var(--text); text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
+.ring-track { fill: none; stroke: color-mix(in oklab, var(--score-tint) 18%, transparent); stroke-width: 9; }
+.ring-fill { fill: none; stroke: var(--score-tint); stroke-width: 9; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dasharray 400ms ease; }
+.ring-num { font-family: var(--sans); font-weight: 650; font-size: 26px; fill: var(--text); text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
 .score .score-name { font-weight: 600; font-size: 13.5px; }
 .score .score-band { font-size: 12px; color: var(--muted); }
 .score .score-band.ok { color: var(--good); }

@@ -59,15 +59,53 @@ Check it:
 curl -s http://127.0.0.1:8787/health
 ```
 
+## Setup on an Ubuntu server, reachable from anywhere
+
+This is the recommended setup: a home server in one place, the phone and the agent
+in another. Tailscale joins them in one private network with no open ports. Its
+`serve` command adds HTTPS with a real certificate, which the iPhone requires.
+
+On the server:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER" && newgrp docker
+git clone https://github.com/KenWuqianghao/open_health.git
+cd open_health && git checkout feat/health-hub-mcp
+openssl rand -hex 24 > ~/.hub-token
+OURA_HUB_TOKEN=$(cat ~/.hub-token) docker compose up -d --build
+curl -s http://127.0.0.1:8787/health
+sudo tailscale serve --bg 8787
+tailscale status
+```
+
+`tailscale serve --bg 8787` publishes the hub as `https://<server>.<tailnet>.ts.net`
+to devices on your tailnet only. Print the exact name with `tailscale serve status`.
+Enable HTTPS certificates once in the Tailscale admin console (DNS → HTTPS
+Certificates) if `serve` asks for it.
+
+On the iPhone: install Tailscale from the App Store, sign in to the same tailnet,
+turn it on. In Open Oura, Settings → Health hub: switch on, URL
+`https://<server>.<tailnet>.ts.net`, the token, then Send Now.
+
+On the Mac (Grok Bot): install Tailscale, sign in. In Grok Bot's MCP settings add
+`https://<server>.<tailnet>.ts.net/mcp/<token>`.
+
+Updates: `git pull && OURA_HUB_TOKEN=$(cat ~/.hub-token) docker compose up -d --build`.
+Backup: the volume `hub-data` holds `hub.db` and `oura.db`; copy them with
+`docker compose cp oura-hub:/data ./backup`.
+
 ## Put TLS in front
 
-The hub speaks plain HTTP. Do not expose port 8787 to the internet as is.
-Use one of these:
+The hub speaks plain HTTP. Do not expose port 8787 to the internet as is. The
+iPhone refuses plain HTTP to a remote host (App Transport Security), so the hub
+needs HTTPS. Use one of these:
 
-- **Tailscale**. Put the hub and the Mac on the same tailnet. Push to
-  `http://<tailscale-ip>:8787`. Grok Bot on the Mac reaches the same address.
-- **Caddy** (or any reverse proxy) with a real domain. Caddy gets a certificate for
-  you. Example `Caddyfile`:
+- **Tailscale serve** (above). Private, no open ports, certificate included.
+- **Caddy** (or any reverse proxy) with a real domain, when the hub must be reachable
+  without Tailscale. Caddy gets a certificate for you. Example `Caddyfile`:
 
 ```text
 hub.example.com {

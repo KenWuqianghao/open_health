@@ -95,6 +95,26 @@ Run these as the `deck` user, not root. Set the Deck's sleep timers to Never and
 keep it on the charger. The community `deck-tailscale` script puts the binaries in
 `/opt/tailscale/`, so call `/opt/tailscale/tailscale` with the full path.
 
+## A public address for an agent that is not on the tailnet
+
+A hosted agent (Grok Bot's cloud runtime, for example) cannot resolve tailnet names.
+Put a tunnel in front of the hub. `GET /health` without the token answers only
+`{"ok":true}`; everything else needs the token, which sits in the MCP URL path.
+
+Quick tunnel, no account, a random `trycloudflare.com` name that changes on restart:
+
+```bash
+podman run -d --name oura-tunnel --restart unless-stopped --network=host docker.io/cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://127.0.0.1:8787
+```
+
+```bash
+podman logs oura-tunnel 2>&1 | grep -o "https://[a-z0-9-]*\.trycloudflare\.com" | head -1
+```
+
+For a name that stays the same, make a named Cloudflare tunnel on your own domain
+(`cloudflared tunnel login`, `tunnel create`, `tunnel route dns`) or enable Tailscale
+Funnel in the admin console and run `tailscale funnel --bg 8787`.
+
 ## Setup on an Ubuntu server, reachable from anywhere
 
 This is the recommended setup: a home server in one place, the phone and the agent

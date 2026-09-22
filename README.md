@@ -16,6 +16,8 @@ consumed here as Git dependencies.
 - **`crates/oura-cli`**: app-oriented CLI entrypoint, including `oura dashboard`,
   DNA explorer routes, blood PDF import, model runners, and local dashboard APIs.
 - **`crates/oura-summary`**: shared dashboard summary JSON consumed by web and iOS.
+- **`crates/oura-hub`**: always-on server that stores pushed summaries and serves
+  them to agents over MCP. See `docs/health-hub.md`.
 - **`crates/oura-core` / `crates/oura-ffi`**: native/iOS FFI surfaces.
 - **`crates/oura-dna` + `dna/`**: local VCF trait/PGS scoring catalog and helpers.
 - **`tools/`**: model runners and app-oriented analysis utilities.

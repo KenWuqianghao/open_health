@@ -1,0 +1,12 @@
+target
+.git
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.ptl
+*.pt
+dna/files
+dashboard/web/node_modules
+apps/ios/OuraApp/build
+.venv

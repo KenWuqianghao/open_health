@@ -1,0 +1,16 @@
+services:
+  oura-hub:
+    build: .
+    image: oura-hub:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      # openssl rand -hex 24 > .hub-token ; export OURA_HUB_TOKEN=$(cat .hub-token)
+      OURA_HUB_TOKEN: ${OURA_HUB_TOKEN:?set OURA_HUB_TOKEN}
+      RUST_LOG: info
+    volumes:
+      - hub-data:/data
+
+volumes:
+  hub-data:

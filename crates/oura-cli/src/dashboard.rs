@@ -189,6 +189,28 @@ fn build_summary(db: &Path, tz: i64) -> Result<Value> {
     oura_summary::build_summary(db, tz, &PythonRunner)
 }
 
+/// Build the summary and POST it to an `oura-hub`. Returns the hub's reply.
+pub fn push(db: &Path, tz: i64, hub_url: &str, token: &str) -> Result<Value> {
+    let summary = build_summary(db, tz)?;
+    let endpoint = format!("{}/ingest/summary", hub_url.trim_end_matches('/'));
+    let body = serde_json::to_string(&summary)?;
+    match ureq::post(&endpoint)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+    {
+        Ok(resp) => {
+            let text = resp.into_string().context("reading the hub reply")?;
+            serde_json::from_str(&text).with_context(|| format!("hub reply is not JSON: {text}"))
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let text = resp.into_string().unwrap_or_default();
+            Err(anyhow!("hub answered {code}: {text}"))
+        }
+        Err(e) => Err(anyhow!("reaching {endpoint}: {e}")),
+    }
+}
+
 // ── summary cache ─────────────────────────────────────────────────────────────
 // build_summary spawns torch subprocesses (~seconds); without a cache every page
 // load re-pays that. We memoise the last result and reuse it until the inputs

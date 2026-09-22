@@ -203,6 +203,19 @@ enum Command {
     },
     /// Read the real on-ring MODE/status of the data features (what's actually on).
     FeatureStatus,
+    /// Build the health summary and push it to an always-on hub (`oura-hub`), so
+    /// an agent can read it over MCP while this machine is off.
+    Push {
+        /// Hub base URL, e.g. https://hub.example.com or http://100.64.0.2:8787.
+        #[arg(long)]
+        to: String,
+        /// The hub's bearer token (or set $OURA_HUB_TOKEN).
+        #[arg(long, env = "OURA_HUB_TOKEN", hide_env_values = true)]
+        token: String,
+        /// Timezone offset (hours from UTC) used for the day boundaries.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+    },
     /// Serve a local web health dashboard (sleep, cardio, SpO2, activity, device)
     /// at http://127.0.0.1:PORT. Rust computes from oura.db; torch models run via
     /// the Python runners. All data stays on this machine.
@@ -390,6 +403,11 @@ async fn main() -> Result<()> {
         Command::Subscribe { feature, mode } => cmd_subscribe(&cli, &key, feature, mode).await,
         Command::FeatureMode { feature, mode } => cmd_feature_mode(&cli, &key, feature, mode).await,
         Command::FeatureStatus => cmd_feature_status(&cli, &key).await,
+        Command::Push { to, token, tz_offset } => {
+            let reply = dashboard::push(&cli.db, *tz_offset, to, token)?;
+            println!("{}", serde_json::to_string_pretty(&reply)?);
+            Ok(())
+        }
         Command::Dashboard {
             port,
             tz_offset,

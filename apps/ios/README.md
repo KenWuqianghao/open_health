@@ -160,6 +160,39 @@ Every day is deleted and rewritten as one unit, so a second export never duplica
 - A Personal Team install expires after 7 days. Build and install again; the data on
   the phone stays.
 
+## Optional: the on-device models
+
+Sleep stages, cardiovascular age, workout detection, the Ring 5 step decoder, and
+illness detection run Oura's own TorchScript models on the phone. They are Oura's
+proprietary files and are not in this repository. Without them the app still
+syncs, shows in-bed time, heart rate, blood oxygen, steps, and energy, and exports
+all of that to Apple Health.
+
+1. Put the decrypted models in `notes/models/` (ignored by git). This repository's
+   `tools/pull_oura_apk.sh` and `tools/decrypt_oura_models.py` produce them from the
+   official app on your own phone and your own account; the key is read from the
+   `OURA_MODEL_KEY` environment variable and is never written to disk.
+2. Export the lite-interpreter files the app bundles:
+   ```bash
+   python3 tools/export_mobile.py
+   ```
+   It writes `notes/models/mobile/*.ptl` and pins the versions the iOS bridge
+   implements: `sleepnet_moonstone_1_2_0`, `cva_2_1_5`,
+   `automatic_activity_detection_3_1_12`, `steps_motion_decoder_2_0_0`,
+   `illness_detection_0_5_1`.
+3. Build LibTorch for iOS once (it compiles PyTorch 2.9; count on an hour per slice
+   and 15 GB of disk):
+   ```bash
+   ./apps/ios/spike/build_libtorch_ios.sh device
+   ./apps/ios/spike/build_libtorch_ios.sh
+   ./apps/ios/package-libtorch-xcframeworks.sh
+   ```
+4. Generate the torch project and build it the same way as above:
+   ```bash
+   cd apps/ios/OuraApp && xcodegen generate --spec project.yml
+   ```
+   The app then writes sleep stages and workouts to Apple Health as well.
+
 ## Troubleshooting
 
 | What you see | Cause | Fix |

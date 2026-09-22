@@ -33,9 +33,15 @@ cd "$SRC"
 git submodule deinit -f third_party/flash-attention 2>/dev/null || true
 git submodule update --init --recursive 2>&1 | tail -3
 
-source "$REPO/.venv/bin/activate" 2>/dev/null || true
-"$REPO/.venv/bin/pip" install -q pyyaml typing_extensions 2>/dev/null || true
-PY="$REPO/.venv/bin/python"; NINJA="$(which ninja)"
+# PyTorch's code generation needs a python with pyyaml + typing_extensions.
+if [ -x "$REPO/.venv/bin/python" ]; then
+    PY="$REPO/.venv/bin/python"
+    "$REPO/.venv/bin/pip" install -q pyyaml typing_extensions 2>/dev/null || true
+else
+    PY="${PYTHON:-$(command -v python3)}"
+    "$PY" -c "import yaml, typing_extensions" || { echo "pip install pyyaml typing_extensions for $PY"; exit 1; }
+fi
+NINJA="$(which ninja)"
 export CMAKE_POLICY_VERSION_MINIMUM=3.5   # cmake 4.x compat for old submodules
 
 echo "==> cmake configure (iOS $TARGET / arm64 / lite / CPU)"

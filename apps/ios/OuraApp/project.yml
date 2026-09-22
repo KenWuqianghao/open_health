@@ -124,9 +124,9 @@ targets:
       # on-device BLE sync lands — then the app builds its own DB from your ring.
       - path: ../../../notes/models/mobile/sleepnet_moonstone_1_2_0.ptl
         buildPhase: resources
-      - path: ../../../notes/models/mobile/cva_2_1_0.ptl
+      - path: ../../../notes/models/mobile/cva_2_1_5.ptl
         buildPhase: resources
-      - path: ../../../notes/models/mobile/automatic_activity_detection_3_1_11.ptl
+      - path: ../../../notes/models/mobile/automatic_activity_detection_3_1_12.ptl
         buildPhase: resources
       - path: ../../../notes/models/mobile/steps_motion_decoder_2_0_0.ptl
         buildPhase: resources

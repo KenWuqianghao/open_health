@@ -62,8 +62,8 @@ mkdir -p "$APP/Frameworks"
 cp "$LT/lib/libtorch.dylib" "$LT/lib/libtorch_cpu.dylib" \
    "$LT/lib/libc10.dylib" "$LT/lib/libtorch_global_deps.dylib" "$APP/Frameworks/"
 cp "$REPO/notes/models/mobile/sleepnet_moonstone_1_2_0.ptl" "$APP/sleepnet_moonstone_1_2_0.ptl"
-cp "$REPO/notes/models/mobile/cva_2_1_0.ptl" "$APP/cva_2_1_0.ptl"
-cp "$REPO/notes/models/mobile/automatic_activity_detection_3_1_11.ptl" "$APP/automatic_activity_detection_3_1_11.ptl"
+cp "$REPO/notes/models/mobile/cva_2_1_5.ptl" "$APP/cva_2_1_5.ptl"
+cp "$REPO/notes/models/mobile/automatic_activity_detection_3_1_12.ptl" "$APP/automatic_activity_detection_3_1_12.ptl"
 cp "$REPO/notes/models/mobile/steps_motion_decoder_2_0_0.ptl" "$APP/steps_motion_decoder_2_0_0.ptl"
 cp "$REPO/notes/models/mobile/illness_detection_0_5_1.ptl" "$APP/illness_detection_0_5_1.ptl"
 # the store runs in WAL mode; fold any -wal pages back in so the single-file copy

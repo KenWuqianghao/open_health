@@ -1272,6 +1272,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oura-analysis"
 version = "0.1.0"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "oura-protocol",
  "serde",
@@ -1336,6 +1337,7 @@ dependencies = [
 [[package]]
 name = "oura-link"
 version = "0.1.0"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "async-trait",
  "btleplug",
@@ -1351,6 +1353,7 @@ dependencies = [
 [[package]]
 name = "oura-protocol"
 version = "0.1.0"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "aes",
  "hex",
@@ -1362,6 +1365,7 @@ dependencies = [
 [[package]]
 name = "oura-store"
 version = "0.1.0"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=2fd398fd986d2dc421fd614e65675fe0ea4f9dbc#2fd398fd986d2dc421fd614e65675fe0ea4f9dbc"
 dependencies = [
  "oura-protocol",
  "rusqlite",

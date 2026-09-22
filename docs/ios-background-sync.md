@@ -25,9 +25,14 @@ a sync alive, when the app syncs, what the user must do, and what iOS does not a
 | `bgRefresh` | iOS runs the refresh task (about every few hours). | About 22 seconds. One attempt. Batches of 512 events. No models. |
 | `bgProcessing` | iOS runs the processing task (usually at night, on charge). | Five minutes for the sync. Models run only when the device is not in Low Power Mode and has memory. |
 | `bleRestore` | The ring reconnected and iOS relaunched the app. | Five minutes. Reuses the connected link. |
+| HealthKit wake | Apple Health changed (the Watch synced, another app wrote) and the hub switch with Apple Health is on. | About 20 seconds. No ring sync: only the Apple Health push to the hub. |
 
 After each run the app submits both scheduled tasks again. The sync cursor is
 saved after every batch, so a run that stops early loses nothing.
+
+After the summary is rebuilt, the app pushes it and the new ring rows to the
+health hub when one is set up (see `health-hub.md`). A refresh run gives the push
+8 seconds; the other runs give it 40. The push cursor is saved after every page.
 
 ## The link after a sync
 

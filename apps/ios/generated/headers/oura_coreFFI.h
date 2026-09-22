@@ -342,6 +342,11 @@ RustBuffer uniffi_oura_core_fn_func_core_version(RustCallStatus *_Nonnull out_st
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXPORT_BATCH_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXPORT_BATCH_JSON
+RustBuffer uniffi_oura_core_fn_func_export_batch_json(RustBuffer db_path, int64_t after_event_id, int64_t after_reading_id, uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_HEALTH_SAMPLES_JSON
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_HEALTH_SAMPLES_JSON
 RustBuffer uniffi_oura_core_fn_func_health_samples_json(RustBuffer db_path, int64_t tz_offset_s, RustBuffer since_unix, RustCallStatus *_Nonnull out_status
@@ -650,6 +655,12 @@ void ffi_oura_core_rust_future_complete_void(uint64_t handle, RustCallStatus *_N
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_CORE_VERSION
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_CORE_VERSION
 uint16_t uniffi_oura_core_checksum_func_core_version(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXPORT_BATCH_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXPORT_BATCH_JSON
+uint16_t uniffi_oura_core_checksum_func_export_batch_json(void
     
 );
 #endif

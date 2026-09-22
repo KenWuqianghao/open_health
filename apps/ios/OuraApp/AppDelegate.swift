@@ -17,8 +17,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             Task { await SyncCoordinator.shared.handleUnsolicitedConnect(peripheral) }
         }
         AppHooks.install()
-        // Must run before launch finishes: iOS refuses later registrations.
+        // Must run before launch finishes: iOS refuses later registrations, and a
+        // HealthKit wake needs its observers in place.
         BGSync.register()
+        HealthBackground.shared.install()
         return true
     }
 }

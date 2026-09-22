@@ -1,0 +1,30 @@
+[package]
+name = "oura-hub"
+description = "Always-on health hub: stores pushed summaries and serves them to agents over MCP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "oura-hub"
+path = "src/main.rs"
+
+[dependencies]
+oura-summary = { path = "../oura-summary" }
+oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "3618c54f47a988b0886681b8eeee53941e240186" }
+oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "3618c54f47a988b0886681b8eeee53941e240186" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -87,6 +87,9 @@ targets:
       - path: OuraApp.swift
       - path: Models.swift
       - path: Core.swift
+      - path: HubPush.swift
+      - path: HealthReader.swift
+      - path: HealthBackground.swift
       - path: Components.swift
       - path: Reports.swift
       - path: Theme.swift

@@ -29,3 +29,4 @@ apps/ios/OuraApp/build/
 apps/ios/build/
 apps/ios/DerivedData/
 local/
+.hub-token

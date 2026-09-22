@@ -143,6 +143,10 @@ which is why Oura's own app has no per-night HRV trend either.
   resting energy (off by default: a Schofield estimate that double counts with a
   Watch), and workouts (torch build). Steps are a MET estimate. Never written: scores,
   skin temperature, distance.
+- **Health hub push**: iOS pushes the summary, the raw ring rows, and the Apple
+  Health samples other sources wrote after each sync (`HubPush.swift`,
+  `HealthReader.swift`, Settings → Health hub). The web side has no push; the desktop
+  uses `oura push` for the summary only. See `docs/health-hub.md`.
 - **Polysomnograph crosshair**: web has a hover crosshair; iOS uses a touch scrubber
   (drag across the lanes) — same idea, adapted to the input.
 - **DNA explorer** (`/dna`): reads genome `*.vcf.gz` files and scores single-SNP **traits**

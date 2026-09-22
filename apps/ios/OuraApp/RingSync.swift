@@ -223,15 +223,15 @@ enum DB {
 /// restore, because losing it costs a factory reset.
 enum Keychain {
     private static let account = "ring-auth-key"
-    private static var base: [String: Any] {
+    private static func base(_ account: String = Keychain.account) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrAccount as String: account]
     }
 
     static func saveKey(_ hex: String) {
         let data = Data(hex.utf8)
-        SecItemDelete(base as CFDictionary)
-        var add = base
+        SecItemDelete(base() as CFDictionary)
+        var add = base()
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         let status = SecItemAdd(add as CFDictionary, nil)
@@ -239,7 +239,7 @@ enum Keychain {
     }
 
     static func loadKey() -> String? {
-        var q = base
+        var q = base()
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
@@ -249,13 +249,37 @@ enum Keychain {
     }
 
     static func deleteKey() {
-        SecItemDelete(base as CFDictionary)
+        SecItemDelete(base() as CFDictionary)
+    }
+
+    // Other secrets, one per account (the hub token). Same accessibility rule.
+    static func save(_ value: String, account: String) {
+        SecItemDelete(base(account) as CFDictionary)
+        var add = base(account)
+        add[kSecValueData as String] = Data(value.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess { dlog("keychain", "save \(account) failed: \(status)") }
+    }
+
+    static func load(account: String) -> String? {
+        var q = base(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data, let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
+    }
+
+    static func delete(account: String) {
+        SecItemDelete(base(account) as CFDictionary)
     }
 
     /// Re-add a key saved by an older build (default `WhenUnlocked` accessibility)
     /// so background syncs can read it. Call only while protected data is available.
     static func migrateAccessibilityIfNeeded() {
-        var q = base
+        var q = base()
         q[kSecReturnAttributes as String] = true
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne

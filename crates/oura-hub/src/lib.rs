@@ -199,7 +199,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health(State(st): State<Arc<AppState>>) -> Response {
+/// Liveness for everyone; the details only with the token, because a public tunnel
+/// may sit in front and the serials and counts are personal.
+async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !bearer(&headers).is_some_and(|t| token_matches(t, &st.token)) {
+        return Json(json!({ "ok": true })).into_response();
+    }
     let latest = st.store.latest().ok().flatten();
     let (ring_ids, serials) = {
         let ring = st.ring.lock().unwrap();

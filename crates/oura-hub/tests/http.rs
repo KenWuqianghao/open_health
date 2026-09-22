@@ -41,6 +41,10 @@ fn summary() -> Value {
     })
 }
 
+fn get_auth(uri: &str) -> Request<Body> {
+    Request::get(uri).header("authorization", format!("Bearer {TOKEN}")).body(Body::empty()).unwrap()
+}
+
 async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, Value) {
     let res = app.clone().oneshot(req).await.unwrap();
     let status = res.status();
@@ -78,6 +82,8 @@ async fn ingest_then_health_then_tools() {
     let app = app();
     let (s, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
     assert_eq!(s, StatusCode::OK);
+    assert_eq!(h, json!({ "ok": true }), "no details without the token");
+    let (_, h) = send(&app, get_auth("/health")).await;
     assert_eq!(h["snapshots"], 0);
 
     let (s, out) = send(&app, post("/ingest/summary", Some(TOKEN), summary())).await;
@@ -87,7 +93,7 @@ async fn ingest_then_health_then_tools() {
     let (_, again) = send(&app, post("/ingest/summary", Some(TOKEN), summary())).await;
     assert_eq!(again["stored"], false);
 
-    let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    let (_, h) = send(&app, get_auth("/health")).await;
     assert_eq!(h["snapshots"], 1);
     assert_eq!(h["latest_generated_at"], 1_700_000_000.0);
 
@@ -166,7 +172,7 @@ async fn ring_rows_round_trip_through_the_replica() {
     let (_, again) = send(&app, post("/ingest/events", Some(TOKEN), batch.clone())).await;
     assert_eq!(again["events_inserted"], 0);
 
-    let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    let (_, h) = send(&app, get_auth("/health")).await;
     assert_eq!(h["ring"]["max_event_id"], 3);
     assert_eq!(h["ring"]["serials"][0], "S1");
 
@@ -235,6 +241,6 @@ async fn health_samples_round_trip_and_fold_into_status() {
     let del = json!({ "samples": [], "deleted": ["h1"] });
     let (_, out) = send(&app, post("/ingest/health", Some(TOKEN), del)).await;
     assert_eq!(out["deleted"], 1);
-    let (_, h) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    let (_, h) = send(&app, get_auth("/health")).await;
     assert_eq!(h["health"].as_array().unwrap().len(), 3);
 }

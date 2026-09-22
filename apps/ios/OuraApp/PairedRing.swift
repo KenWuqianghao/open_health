@@ -28,6 +28,14 @@ enum PairedRingStore {
     static func clear() {
         UserDefaults.standard.removeObject(forKey: key)
     }
+
+    /// The ring rotates its Bluetooth address while unbonded, so its CoreBluetooth
+    /// identifier changes now and then. Keep the record, swap the identifier.
+    static func updatePeripheralID(_ id: UUID) {
+        guard var ring = load(), ring.peripheralID != id else { return }
+        ring.peripheralID = id
+        save(ring)
+    }
 }
 
 /// What to do with the GATT link once a sync is over.

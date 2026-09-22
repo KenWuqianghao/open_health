@@ -168,7 +168,7 @@ final class BLETransport: NSObject, RingTransport, CBPeripheralDelegate, @unchec
             }
             writeCont = c
             lock.unlock()
-            dlog("send", "\(data.count)B \(data.hexString)")
+            dlog("send", "\(data.count)B \(Self.loggable(data))")
             peripheral.writeValue(data, for: wc, type: .withResponse)
         }
     }
@@ -318,5 +318,15 @@ final class BLETransport: NSObject, RingTransport, CBPeripheralDelegate, @unchec
     private func finishWrite(_ result: Result<Void, Error>) {
         lock.lock(); let c = writeCont; writeCont = nil; lock.unlock()
         c?.resume(with: result)
+    }
+}
+
+extension BLETransport {
+    /// Frame hex for the transcript. The set-auth-key frame (tag 0x24) carries the
+    /// ring key in clear, so only its tag and length are logged.
+    static func loggable(_ data: Data) -> String {
+        guard data.first == 0x24 else { return data.hexString }
+        let len = data.count > 1 ? String(format: "%02x", data[1]) : ""
+        return "24\(len) <auth key redacted>"
     }
 }

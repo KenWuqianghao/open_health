@@ -406,6 +406,7 @@ final class RingSync: ObservableObject {
             default: status = ""
             }
         case .failed(let exit, let detail):
+            if let hint = BLEErrorHint.text(inDetail: detail) { status = hint; return }
             switch (trigger, exit) {
             case (_, .authRejected): break // status already set
             case (_, .heldByOtherApp), (_, .connectFailed) where otherAppHoldsRing:

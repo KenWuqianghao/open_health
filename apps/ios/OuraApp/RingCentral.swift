@@ -46,8 +46,10 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     enum Ownership {
         case free
-        /// A pending `connect` with no timeout: iOS wakes the app on connection.
-        case armed(CBPeripheral)
+        /// Waiting for the ring: a pending `connect` on its last known identifier
+        /// (nil when iOS has none) plus a service-filtered scan that catches the ring
+        /// under a rotated address. iOS wakes the app for either.
+        case armed(CBPeripheral?)
         /// A sync holds the link.
         case owned(SyncTrigger, BLETransport)
         /// The link is kept after a sync (`LinkPolicy.park`); nobody drives it.
@@ -69,6 +71,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var powerWaiters: [CheckedContinuation<Void, Error>] = []
     private var holdOffUntil = Date.distantPast
     private var parkedWakeTimer: DispatchWorkItem?
+    private var armScanning = false
 
     /// Set by the sync coordinator: a connection that nobody asked for right now
     /// (the armed connect fired, a restored session, a parked ring spoke).
@@ -178,6 +181,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
                 self.lock.unlock()
                 dlog("scan", "discovery finished — \(self.candidates.count) ring(s) seen")
                 done.resume()
+                self.resumeArmScan()
             }
             discoverTimer = work
             lock.unlock()
@@ -219,15 +223,11 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
                 self.central.stopScan()
                 self.lock.lock()
                 var at = self.scanStage
-                let others = self.otherDevices.count
                 self.lock.unlock()
                 if mode == .foreground {
-                    at = others > 0
-                        ? "scanning — saw \(others) other BLE device(s) but no Oura ring: "
-                            + "the ring is connected to another device (phone with the "
-                            + "official app? Mac?), off its charger and asleep, or out of battery"
-                        : "scanning — saw NO BLE advertisements at all: Bluetooth may be "
-                            + "off, restricted, or the permission was revoked"
+                    at = "scanning — the ring did not advertise: it is out of range, linked to "
+                        + "another phone (official app?), or out of battery. A ring on its "
+                        + "charger next to the iPhone is the sure case"
                 } else {
                     at = "scanning (background, service-filtered) — the ring did not advertise"
                 }
@@ -236,10 +236,12 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             }
             scanTimer = work
             lock.unlock()
+            // Always filter by the Oura service: a ring advertises it in every state,
+            // and iOS drops unfiltered scans the moment the app leaves the foreground.
             switch mode {
             case .foreground:
-                dlog("ble", "scanning (unfiltered, allow duplicates) — matching service \(RingUUID.service)")
-                central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+                dlog("ble", "scanning (service-filtered, allow duplicates) for \(RingUUID.service)")
+                central.scanForPeripherals(withServices: [RingUUID.service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
             case .background:
                 dlog("ble", "scanning (service-filtered) for \(RingUUID.service)")
                 central.scanForPeripherals(withServices: [RingUUID.service], options: nil)
@@ -255,6 +257,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         lock.unlock()
         timer?.cancel()
         c?.resume(with: result)
+        resumeArmScan()
     }
 
     // ── connect ──
@@ -319,7 +322,8 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// Hold a pending connect to the paired ring so iOS relaunches the app when the
     /// ring comes back. No-op unless the app is idle, paired, and powered on.
     func arm() {
-        guard central.state == .poweredOn, let p = pairedPeripheral() else { return }
+        guard central.state == .poweredOn, PairedRingStore.load() != nil else { return }
+        let p = pairedPeripheral()
         lock.lock()
         guard case .free = ownership else { lock.unlock(); return }
         if Date() < holdOffUntil {
@@ -329,29 +333,60 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         }
         ownership = .armed(p)
         lock.unlock()
-        p.delegate = self
-        if p.state == .connected {
-            dlog("ble", "arm: ring already connected — parking it")
-            park(p)
-            return
+        if let p {
+            p.delegate = self
+            if p.state == .connected {
+                dlog("ble", "arm: ring already connected — parking it")
+                park(p)
+                return
+            }
+            central.connect(p, options: nil)
         }
-        dlog("ble", "armed — pending connect to \(p.identifier.uuidString.suffix(12)) (iOS wakes us when it connects)")
-        central.connect(p, options: nil)
+        startArmScan()
+        let known = p.map { String($0.identifier.uuidString.suffix(12)) } ?? "<no known id>"
+        dlog("ble", "armed — pending connect to \(known) plus a filtered scan for a new address (iOS wakes us for either)")
+    }
+
+    /// The ring rotates its Bluetooth address while unbonded, so a pending connect on
+    /// the old identifier can wait forever. A service-filtered scan is allowed in the
+    /// background and catches the ring under any address; `didDiscover` then connects.
+    private func startArmScan() {
+        lock.lock()
+        guard case .armed = ownership, !armScanning else { lock.unlock(); return }
+        armScanning = true
+        lock.unlock()
+        central.scanForPeripherals(withServices: [RingUUID.service], options: nil)
+    }
+
+    private func stopArmScan() {
+        lock.lock()
+        let was = armScanning
+        armScanning = false
+        lock.unlock()
+        if was { central.stopScan() }
+    }
+
+    /// `scanForRing` and `discoverRings` take over the radio's one scan; restart the
+    /// armed scan once they are done, if we are still armed.
+    private func resumeArmScan() {
+        lock.lock(); armScanning = false; lock.unlock()
+        startArmScan()
     }
 
     func disarm() {
         lock.lock()
-        let peripheral: CBPeripheral?
+        var peripheral: CBPeripheral?
+        var clear = false
         switch ownership {
-        case .armed(let p), .parked(let p): peripheral = p
-        default: peripheral = nil
+        case .armed(let p): peripheral = p; clear = true
+        case .parked(let p): peripheral = p; clear = true
+        default: break
         }
-        if peripheral != nil { ownership = .free }
+        if clear { ownership = .free }
         lock.unlock()
-        if let peripheral {
-            central.cancelPeripheralConnection(peripheral)
-            dlog("ble", "disarmed")
-        }
+        stopArmScan()
+        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        if clear { dlog("ble", "disarmed") }
     }
 
     /// Take the link for a sync. The peripheral must be connected (or connecting via
@@ -362,6 +397,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         ownership = .owned(trigger, t)
         parkedWakeTimer?.cancel(); parkedWakeTimer = nil
         lock.unlock()
+        stopArmScan()
         peripheral.delegate = t
         return t
     }
@@ -413,6 +449,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             if case .owned(_, let t) = ownership { owned = t } else { owned = nil }
             // Peripheral objects are invalid after a Bluetooth reset.
             ownership = .free
+            armScanning = false
             lock.unlock()
             for w in waiters { w.resume(throwing: BLEError.poweredOff) }
             owned?.linkDidDrop(error: BLEError.poweredOff)
@@ -441,6 +478,18 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
                 lock.lock(); ownership = .armed(p); lock.unlock()
             default:
                 dlog("ble", "restored peripheral in state \(p.state.rawValue)")
+            }
+        }
+        if let services = dict[CBCentralManagerRestoredStateScanServicesKey] as? [CBUUID], services.contains(RingUUID.service) {
+            lock.lock()
+            if case .parked = ownership {
+                lock.unlock()
+                central.stopScan()
+            } else {
+                if case .free = ownership { ownership = .armed(nil) }
+                armScanning = true
+                lock.unlock()
+                dlog("ble", "restored the armed scan — iOS kept looking for the ring")
             }
         }
     }
@@ -480,6 +529,30 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             let mfr = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)?.hexString ?? "—"
             dlog("scan", "saw '\(advName.isEmpty ? "<no name>" : advName)' id=\(peripheral.identifier.uuidString.suffix(12)) rssi=\(RSSI) services=[\(svc)] mfr=\(mfr)")
         }
+        lock.lock()
+        var armHit = false
+        var oldArmed: CBPeripheral?
+        if armScanning, handler == nil, !waitingForFirst, case .armed(let p) = ownership {
+            armHit = true
+            oldArmed = p
+            armScanning = false
+            ownership = .armed(peripheral)
+        }
+        lock.unlock()
+        if armHit {
+            central.stopScan()
+            if let old = oldArmed, old.identifier != peripheral.identifier {
+                central.cancelPeripheralConnection(old)
+            }
+            if PairedRingStore.load()?.peripheralID != peripheral.identifier {
+                PairedRingStore.updatePeripheralID(peripheral.identifier)
+                dlog("ble", "ring now advertises as \(peripheral.identifier.uuidString.suffix(12)) — identifier saved")
+            }
+            dlog("ble", "armed scan saw the ring (rssi=\(RSSI)) — connecting")
+            peripheral.delegate = self
+            central.connect(peripheral, options: nil)
+            return
+        }
         if let handler {
             lock.lock()
             var cand = candidates[peripheral.identifier] ?? RingCandidate(
@@ -504,7 +577,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         lock.lock()
         let awaited = connectTarget == peripheral.identifier
         let armed: Bool
-        if case .armed(let p) = ownership, p.identifier == peripheral.identifier { armed = true } else { armed = false }
+        if case .armed(let p) = ownership, p?.identifier == peripheral.identifier { armed = true } else { armed = false }
         lock.unlock()
         if awaited {
             finishConnect(peripheral, .success(peripheral))
@@ -513,6 +586,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         if armed {
             dlog("ble", "armed connect fired — waking the sync")
             lock.lock(); ownership = .parked(peripheral); lock.unlock()
+            stopArmScan()
             onUnsolicitedConnect?(peripheral)
         }
     }
@@ -521,9 +595,13 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         dlog("ble", "GATT connect FAILED: \(error.map { String(describing: $0) } ?? "no error info")")
         finishConnect(peripheral, .failure(error ?? BLEError.notFound))
         lock.lock()
-        if case .armed(let p) = ownership, p.identifier == peripheral.identifier { ownership = .free }
+        var rearm = false
+        if case .armed(let p) = ownership, p?.identifier == peripheral.identifier { ownership = .free; rearm = true }
         lock.unlock()
-        // An armed connect that fails is re-armed by the next state change / sync.
+        if rearm {
+            stopArmScan()
+            arm()
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
@@ -562,5 +640,24 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         parkedWakeTimer = work
         lock.unlock()
         queue.asyncAfter(deadline: .now() + 30, execute: work)
+    }
+}
+
+/// Plain words for the CoreBluetooth failures the user can fix themselves.
+enum BLEErrorHint {
+    static let stalePairing = "iOS still holds an old Bluetooth pairing for this ring, made by the official Oura app before the factory reset. Open Settings → Bluetooth, tap the info button next to the Oura ring, choose Forget This Device, then try again."
+
+    static func text(_ error: Error) -> String? {
+        let ns = error as NSError
+        guard ns.domain == CBErrorDomain else { return nil }
+        switch CBError.Code(rawValue: ns.code) {
+        case .peerRemovedPairingInformation: return stalePairing
+        default: return nil
+        }
+    }
+
+    /// Same mapping for an error that already became a string (sync outcomes).
+    static func text(inDetail detail: String) -> String? {
+        detail.contains("Peer removed pairing information") ? stalePairing : nil
     }
 }

@@ -38,6 +38,7 @@ final class RingPairing: ObservableObject {
     private var pump: Task<Void, Never>?
     private var chosen: RingCandidate?
     private var probe: ProbeReport?
+    private var lastStage = ""
 
     func startScan() async {
         step = .scanning
@@ -68,16 +69,9 @@ final class RingPairing: ObservableObject {
         chosen = cand
         step = .probing(cand)
         status = "connecting…"
-        let central = RingCentral.shared
         do {
-            guard let p = central.pairedPeripheralFor(id: cand.id) else { throw BLEError.notFound }
-            try await central.connect(p, timeout: 30)
-            let t = central.claim(p, for: .postPair)
-            transport = t
-            try await t.prepare()
-            let s = RingSession(writer: RingWriter(t))
-            session = s
-            pump = Task { for await frame in t.notifications { s.pushFrame(data: frame) } }
+            try await openLink(cand)
+            guard let s = session else { return }
             status = "asking the ring who owns it…"
             let report = try await s.probe(keyHex: Keychain.loadKey())
             probe = report
@@ -88,10 +82,11 @@ final class RingPairing: ObservableObject {
                 status = ""
                 step = .ready(serial: report.serial, generation: gen)
             case .pairedWithThisKey:
-                // The stored key already works (a reinstall): record the ring and sync.
-                status = "this ring is already paired with this app"
-                finishPairing(serial: report.serial, hardwareId: report.hardwareId, firmware: report.firmware,
-                              battery: "—", features: "kept")
+                // The stored key already works (a reinstall, or a pairing that lost the
+                // link after the install): finish the setup with that key.
+                guard let stored = Keychain.loadKey() else { return }
+                status = "this ring already holds this iPhone's key — finishing setup…"
+                await runPair(key: stored, fresh: false)
             case .ownedElsewhere:
                 tearDown()
                 step = .needsReset("This ring still holds another key (the official Oura app or another computer). Factory-reset it first: remove the ring in the Oura app and fully close that app, or use the charger reset. Then try again.")
@@ -102,37 +97,81 @@ final class RingPairing: ObservableObject {
         } catch {
             dlog("pair", "probe FAILED: \(error)")
             tearDown()
-            step = .failed("Could not talk to the ring: \(error)")
+            step = .failed(BLEErrorHint.text(error) ?? "Could not talk to the ring: \(error)")
         }
+    }
+
+    /// Connect to `cand`, subscribe, and start a Rust session on the link.
+    private func openLink(_ cand: RingCandidate) async throws {
+        let central = RingCentral.shared
+        guard let p = central.pairedPeripheralFor(id: cand.id) else { throw BLEError.notFound }
+        try await central.connect(p, timeout: 30)
+        let t = central.claim(p, for: .postPair)
+        transport = t
+        try await t.prepare()
+        let s = RingSession(writer: RingWriter(t))
+        session = s
+        pump = Task { for await frame in t.notifications { s.pushFrame(data: frame) } }
     }
 
     /// Make a key, save it, install it, enable the core features, start the first sync.
     func pair() async {
-        guard let s = session, let t = transport else { return }
-        step = .pairing
         let key = KeyGen.random16Hex()
         // The key is saved BEFORE the ring gets it: a crash mid-install must never
         // lose the only copy of a key that is live on the ring.
         Keychain.saveKey(key)
+        await runPair(key: key, fresh: true)
+    }
+
+    /// Run the pair sequence with `key` over the open link. A ring can drop the link
+    /// right after it takes the key (seen on Ring 3), so the sequence is retried over a
+    /// fresh link with the same key; the Rust side then skips the install. The key is
+    /// deleted only when it is `fresh` and the ring never reached the install stage.
+    private func runPair(key: String, fresh: Bool) async {
+        guard session != nil, transport != nil, let cand = chosen else { return }
+        step = .pairing
+        lastStage = ""
         status = "installing the key…"
-        do {
-            let progress = SyncProgressBridge { [weak self] stage, _, _ in
-                self?.status = Self.stageText(stage)
-            }
-            let report = try await s.pair(dbPath: DB.url.path, keyHex: key, plan: .core, progress: progress)
-            let battery = report.batteryPct.map { "\($0)%" } ?? "—"
-            let features = report.features.map { "\($0.feature): \($0.result)" }.joined(separator: ", ")
-            dlog("pair", "paired serial=\(report.serial) installed=\(report.keyInstalled) cursorReset=\(report.cursorReset) features=[\(features)]")
-            finishPairing(serial: report.serial, hardwareId: report.hardwareId, firmware: report.firmware,
-                          battery: battery, features: features)
-            _ = t
-        } catch {
-            dlog("pair", "pair FAILED: \(error)")
-            // The key never took: forget it so the next attempt starts clean.
-            Keychain.deleteKey()
-            tearDown()
-            step = .failed("Pairing failed: \(error)")
+        let progress = SyncProgressBridge { [weak self] stage, _, _ in
+            self?.lastStage = stage
+            self?.status = Self.stageText(stage)
         }
+        let attempts = 3
+        for attempt in 1...attempts {
+            do {
+                if attempt > 1 {
+                    status = "the ring dropped the link — reconnecting (\(attempt)/\(attempts))…"
+                    try await Task.sleep(for: .seconds(2))
+                    try await openLink(cand)
+                }
+                guard let s = session else { throw BLEError.notConnected }
+                let report = try await s.pair(dbPath: DB.url.path, keyHex: key, plan: .core, progress: progress)
+                let battery = report.batteryPct.map { "\($0)%" } ?? "—"
+                let features = report.features.map { "\($0.feature): \($0.result)" }.joined(separator: ", ")
+                dlog("pair", "paired serial=\(report.serial) installed=\(report.keyInstalled) cursorReset=\(report.cursorReset) features=[\(features)] attempt=\(attempt)")
+                finishPairing(serial: report.serial, hardwareId: report.hardwareId, firmware: report.firmware,
+                              battery: battery, features: features)
+                return
+            } catch {
+                dlog("pair", "pair attempt \(attempt)/\(attempts) FAILED after stage '\(lastStage)': \(error)")
+                tearDown()
+                if fresh && !Self.keyMayBeOnRing(afterStage: lastStage) {
+                    // The ring never got the key: forget it so the next attempt starts clean.
+                    Keychain.deleteKey()
+                    step = .failed(BLEErrorHint.text(error) ?? "Pairing failed: \(error)")
+                    return
+                }
+                if attempt == attempts {
+                    step = .failed("The ring took the key but dropped the link before the setup finished. The key is kept on this iPhone. Leave the ring on its charger next to the iPhone and tap Try again.")
+                    return
+                }
+            }
+        }
+    }
+
+    /// Stages at or after which the ring may already hold the key.
+    nonisolated static func keyMayBeOnRing(afterStage stage: String) -> Bool {
+        !["", "identify", "probe"].contains(stage)
     }
 
     private func finishPairing(serial: String, hardwareId: String?, firmware: String?, battery: String, features: String) {

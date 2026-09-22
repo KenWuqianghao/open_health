@@ -417,7 +417,7 @@ struct RootView: View {
     @State private var s: Summary? = SummaryCache.load()
     @State private var path = NavigationPath()
     @State private var showSync = false
-    @State private var showPairing = !RingSync.shared.isPaired && Keychain.loadKey() == nil
+    @State private var showPairing = !RingSync.shared.isPaired
     @State private var showProfile = false
     @State private var loadGeneration = 0
     @State private var isRefreshingSummary = false

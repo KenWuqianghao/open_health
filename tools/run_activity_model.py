@@ -23,7 +23,7 @@ from epoch_time import build_epochs, make_unix_s
 warnings.filterwarnings("ignore", message=".*searchsorted.*")
 
 REPO = Path(__file__).resolve().parent.parent
-MODEL_NAME = "automatic_activity_detection_3_1_11.pt"
+MODEL_NAME = "automatic_activity_detection_3_1_12.pt"
 MODEL = resolve_models_dir(REPO, MODEL_NAME) / MODEL_NAME
 STEP_MODEL = MODEL.parent / "steps_motion_decoder_2_0_0.pt"
 MODEL_VERSION = "3.1.11"

@@ -3,6 +3,7 @@ run_sleep_model). Imported as a sibling module — each runner's directory is on
 sys.path[0] when invoked as `python tools/run_*.py`.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -30,6 +31,23 @@ def resolve_models_dir(repo, required=None):
             candidates[0],
         )
     return next((path for path in candidates if path.is_dir()), candidates[0])
+
+
+def newest_models(models_dir):
+    """Names (without `.pt`) of the newest version of every model family in
+    ``models_dir``. A name is ``<family>_<major>_<minor>_<patch>``; the highest
+    version wins. Reading the directory keeps the list true to the decrypted set,
+    which changes with every app release.
+    """
+    best = {}
+    for path in sorted(Path(models_dir).glob("*.pt")):
+        m = re.fullmatch(r"(.+?)_(\d+)_(\d+)_(\d+)", path.stem)
+        if not m:
+            continue
+        family, version = m.group(1), tuple(int(x) for x in m.groups()[1:])
+        if family not in best or version > best[family][0]:
+            best[family] = (version, path.stem)
+    return [name for _, name in sorted(best.values(), key=lambda t: t[1])]
 
 
 def resolve_db(arg, repo):

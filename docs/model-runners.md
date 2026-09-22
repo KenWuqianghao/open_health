@@ -9,10 +9,10 @@ each can and can't do.
 
 | tool | model(s) | output | status |
 | --- | --- | --- | --- |
-| `oura sessions` / `tools/run_activity_model.py` | `automatic_activity_detection_3_1_11` | activity/workout segments + type label | ✅ runs |
+| `oura sessions` / `tools/run_activity_model.py` | `automatic_activity_detection_3_1_12` | activity/workout segments + type label | ✅ runs |
 | `tools/run_sleep_model.py` | `sleepnet_moonstone_1_2_0` | DEEP/LIGHT/REM/WAKE hypnogram + efficiency | ✅ runs |
 | `tools/run_models.py bdi` | `sleepnet_bdi_0_4_0` | hypnogram + apnea/breathing-disturbance | ✅ runs |
-| `tools/run_cva_model.py` | `cva_2_1_0` | cardiovascular (vascular) age + pulse-wave velocity | ✅ runs (needs `cva_ppg` on — see [cva-cardiovascular-age.md](cva-cardiovascular-age.md)) |
+| `tools/run_cva_model.py` | `cva_2_1_5` | cardiovascular (vascular) age + pulse-wave velocity | ✅ runs (needs `cva_ppg` on — see [cva-cardiovascular-age.md](cva-cardiovascular-age.md)) |
 | `tools/run_spo2.py` | (no model — Oura's calibration) | overnight SpO2 % | ✅ runs (see [spo2-calibration.md](spo2-calibration.md)) |
 | `tools/run_models.py daily_medians` | `daily_medians_1_1_0` | HRV/HR/temp/MET daily medians | ⚠️ runs but needs **awake** HRV (ours is nocturnal) |
 | `tools/inspect_models.py` | all | dump each model's `forward()` schema | helper |
@@ -24,7 +24,7 @@ also fixes the BDI stage-column order to `[AWAKE, LIGHT, REM, DEEP]`.
 
 Of the ~26 newest-version models, most are blocked on a signal we can't get:
 
-- **raw PPG waveform** — `cva_2_1_0` was here until `cva_ppg` was enabled (now
+- **raw PPG waveform** — `cva_2_1_5` was here until `cva_ppg` was enabled (now
   `cva_raw_ppg_data` 0x81 supplies it). Still blocked for `halite` (needs the same
   raw PPG wired) and `whr` (needs raw PPG + raw accel).
 - **raw ACM / stepmotion gait** — `step_counter`, `steps_motion_decoder`,
@@ -40,6 +40,10 @@ Of the ~26 newest-version models, most are blocked on a signal we can't get:
 (The full per-model matrix lives in the local-only `notes/model-usage-map.md`.)
 
 ## Notes
+- Model versions follow the app release the files were taken from. The iOS bridge
+  implements the forward() contract of `automatic_activity_detection_3_1_12` (same as
+  3.1.11) and `cva_2_1_5` (same as 2.1.0); `automatic_activity_detection_3_1_15` changed
+  its settings inputs and is not wired yet. `tools/export_mobile.py` pins the app's set.
 - All runners read `oura.db` by default and reference `notes/models/` (both
   gitignored — no model weights or personal data are committed).
 - The models are Oura's proprietary, decrypted artifacts; they are **not** included

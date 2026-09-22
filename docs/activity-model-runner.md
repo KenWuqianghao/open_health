@@ -1,7 +1,7 @@
 # Running Oura's activity-detection model on our data
 
 `tools/run_activity_model.py` feeds our stored ring events into Oura's decrypted
-TorchScript `automatic_activity_detection_3_1_11.pt` and prints detected activity
+TorchScript `automatic_activity_detection_3_1_12.pt` and prints detected activity
 segments — **no raw IMU / RData needed**, it runs on the windowed signals we
 already sync.
 

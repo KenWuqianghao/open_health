@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Export every (newest-version) decrypted Oura TorchScript model to the PyTorch
+"""Export the decrypted Oura TorchScript models (newest per family, plus the
+versions the iOS app pins) to the PyTorch
 lite-interpreter (`.ptl`) format used by on-device runtimes (iOS/Android).
 
 This is the iOS spike's go/no-go: the shipped models are full TorchScript
@@ -21,38 +22,21 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 import torch
 
+from _common import newest_models
+
 REPO = Path(__file__).resolve().parent.parent
 MODELS = REPO / "notes" / "models"
 OUT = MODELS / "mobile"
 
-# newest version per family (same list as inspect_models.py)
-NEWEST = [
-    "automatic_activity_detection_3_1_11",
-    "atlas_2_1_0",
-    "awhr_imputation_1_2_0",
-    "awhr_profile_selector_1_0_1",
-    "cumulative_stress_1_2_2",
-    "cva_2_1_0",
-    "cva_calibrator_1_3_0",
-    "daily_medians_1_1_0",
-    "daily_short_term_baselines_1_1_0",
-    "dhrv_imputation_1_1_0",
-    "energy_expenditure_1_0_0",
-    "halite_1_2_0",
+# The iOS app pins the versions whose forward() contract TorchBridge.mm implements.
+# Newer files in notes/models/ are exported too (see newest_models), but the app
+# bundles exactly these.
+IOS_APP = [
+    "automatic_activity_detection_3_1_12",
+    "cva_2_1_5",
     "illness_detection_0_5_1",
-    "insomnia_0_1_4",
-    "meal_timing_0_1_0",
-    "popsicle_1_6_0",
-    "pregnancy_biometrics_0_4_0",
-    "sleepnet_bdi_0_4_0",
     "sleepnet_moonstone_1_2_0",
-    "sleepstaging_2_6_0",
-    "step_counter_1_3_0",
     "steps_motion_decoder_2_0_0",
-    "stress_daytime_sensing_1_1_0",
-    "stress_resilience_2_2_1",
-    "training_stress_score_0_2_1",
-    "whr_2_7_1",
 ]
 
 
@@ -75,7 +59,8 @@ def main():
     print(f"bytecode version: {torch._C._get_max_operator_version()} (torch {torch.__version__})")
     ok = fail = 0
     total = 0
-    for name in NEWEST:
+    names = sorted(set(newest_models(MODELS)) | set(IOS_APP))
+    for name in names:
         n, sz, err = export_one(name)
         if err or sz is None:
             print(f"  FAIL {n:42s}: {err or 'unknown'}")

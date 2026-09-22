@@ -45,9 +45,9 @@ xcodebuild -exportArchive -archivePath build/OuraApp.xcarchive \
 ## Still on you
 - **Signing**: Team ID + a distribution provisioning profile (only you can do this).
 - **Version bumps**: `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `project.yml`.
-- **Data**: the local `project.yml` build bundles `oura.db` when that gitignored file is
-  present, which is useful for a personal TestFlight. The Xcode Cloud `project-ci.yml`
-  build does not bundle `oura.db`, `.ptl` models, or LibTorch.
+- **Data**: the app builds its own `oura.db` from the ring; no build bundles one. The
+  local `project.yml` build bundles the `.ptl` models and LibTorch; the Xcode Cloud
+  `project-ci.yml` build has neither.
 
 ## Background modes (App Review note)
 

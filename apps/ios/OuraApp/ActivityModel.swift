@@ -1,7 +1,7 @@
 #if TORCH
 import Foundation
 
-/// Android-parity runner for Oura's automatic_activity_detection 3.1.11 model.
+/// Android-parity runner for Oura's automatic_activity_detection 3.1.12 model.
 /// The official app evaluates each local day separately and feeds the real decoded
 /// step-motion channel. Both details materially affect the predicted sport.
 enum ActivityModel {
@@ -39,7 +39,7 @@ enum ActivityModel {
 
     static func run(profile: Profile?, events: [EventStore.Ev], clock: EventStore.RingClock,
                     progress: @escaping @Sendable (String) -> Void = { _ in }) -> (sessions: [WorkoutSession], error: String?) {
-        guard let aadPath = Bundle.main.path(forResource: "automatic_activity_detection_3_1_11", ofType: "ptl")
+        guard let aadPath = Bundle.main.path(forResource: "automatic_activity_detection_3_1_12", ofType: "ptl")
         else { return ([], "activity model file missing from the app bundle") }
 
         guard !events.isEmpty else { return ([], nil) }

@@ -21,6 +21,21 @@
 // plus four models used to race here and abort the process.
 static std::mutex g_torch;
 
+// Last failure message, for the app transcript (NSLog only reaches the system log).
+static std::mutex g_err;
+static std::string g_last_error;
+static void setError(const char *fn, const std::string &what) {
+    NSLog(@"%s: %s", fn, what.c_str());
+    std::lock_guard<std::mutex> lock(g_err);
+    g_last_error = std::string(fn) + ": " + what;
+}
+const char *oura_torch_last_error(void) {
+    static thread_local std::string copy;
+    std::lock_guard<std::mutex> lock(g_err);
+    copy = g_last_error;
+    return copy.c_str();
+}
+
 static torch::jit::mobile::Module &cachedModule(const char *path,
                                                 std::unique_ptr<torch::jit::mobile::Module> &slot,
                                                 std::string &slotPath) {
@@ -75,7 +90,7 @@ int oura_sleepnet(const char *model_path,
         auto out = m.forward(inputs).toTuple();
         auto staging = out->elements()[1].toTensor();           // [epochs, channels]
         if (staging.dim() < 2 || staging.size(1) < 1) {
-            NSLog(@"oura_sleepnet: unexpected staging shape");
+            setError("oura_sleepnet", "unexpected staging shape");
             return -1;
         }
         auto col0 = staging.select(1, 0).to(at::kInt).contiguous();
@@ -87,7 +102,7 @@ int oura_sleepnet(const char *model_path,
         }
         return n;
     } catch (const std::exception &e) {
-        NSLog(@"oura_sleepnet: %s", e.what());
+        setError("oura_sleepnet", e.what());
         return -1;
     }
 }
@@ -108,7 +123,7 @@ int oura_cva(const char *model_path, const float *ppg, int n_segs, const float *
         *out_pwv = out->elements()[3].toTensor().item<double>();
         return 0;
     } catch (const std::exception &e) {
-        NSLog(@"oura_cva: %s", e.what());
+        setError("oura_cva", e.what());
         return -1;
     }
 }
@@ -148,7 +163,7 @@ int oura_activity(const char *model_path, const float *context, const float *use
         auto workouts = out->elements()[0].toTensor().to(at::kFloat).contiguous();
         if (!workouts.defined() || workouts.numel() == 0) return 0;
         if (workouts.dim() != 2 || workouts.size(1) != 9) {
-            NSLog(@"oura_activity: unexpected workouts shape dim=%d", (int)workouts.dim());
+            setError("oura_activity", "unexpected workouts shape dim=" + std::to_string((int)workouts.dim()));
             return -1;
         }
         int n = std::min<int>((int)workouts.size(0), max_rows);
@@ -159,7 +174,7 @@ int oura_activity(const char *model_path, const float *context, const float *use
         }
         return n;
     } catch (const std::exception &e) {
-        NSLog(@"oura_activity: %s", e.what());
+        setError("oura_activity", e.what());
         return -1;
     }
 }
@@ -181,7 +196,7 @@ int oura_stepmotion(const char *model_path, const int64_t *timestamps_ms,
         auto out_data = result->elements()[1].toTensor().to(at::kFloat).contiguous();
         if (!out_data.defined() || out_data.numel() == 0) return 0;
         if (out_data.dim() != 2 || out_data.size(1) != 11) {
-            NSLog(@"oura_stepmotion: unexpected feature shape dim=%d", (int)out_data.dim());
+            setError("oura_stepmotion", "unexpected feature shape dim=" + std::to_string((int)out_data.dim()));
             return -1;
         }
         int n = std::min<int>((int)out_data.size(0), max_rows);
@@ -195,7 +210,7 @@ int oura_stepmotion(const char *model_path, const int64_t *timestamps_ms,
         }
         return n;
     } catch (const std::exception &e) {
-        NSLog(@"oura_stepmotion: %s", e.what());
+        setError("oura_stepmotion", e.what());
         return -1;
     }
 }
@@ -238,7 +253,7 @@ int oura_illness(const char *model_path, const float *series, const float *scala
         }
         return 0;
     } catch (const std::exception &e) {
-        NSLog(@"oura_illness: %s", e.what());
+        setError("oura_illness", e.what());
         return -1;
     }
 }

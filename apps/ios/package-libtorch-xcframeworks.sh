@@ -4,11 +4,12 @@
 # (ITMS-90426 "SwiftSupport folder is missing" / invalid bundle), it wants dynamic libs
 # inside frameworks. Xcode then picks the right slice per SDK and embeds+signs them.
 #
-# Prereq: build BOTH slices first —
-#   apps/ios/spike/build_libtorch_ios.sh          # simulator → build_ios/install
+# Prereq: the device slice; the simulator slice is optional (device-only xcframeworks
+# build and archive for a phone, the simulator needs the second slice) —
 #   apps/ios/spike/build_libtorch_ios.sh device   # device    → build_ios_device/install
+#   apps/ios/spike/build_libtorch_ios.sh          # simulator → build_ios/install
 #
-# Output: apps/ios/libtorch-xcframeworks/<name>.xcframework (gitignored, local artifact).
+# Output: apps/ios/libtorch-xcframeworks/<name>.xcframework plus include/ (gitignored).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root from this script's location
 LT="$REPO/local/libtorch-ios/pytorch"
@@ -19,9 +20,9 @@ WORK="$REPO/apps/ios/.libtorch-frameworks-build"
 MIN=17.0
 LIBS="libtorch libtorch_cpu libc10 libtorch_global_deps"
 
-for d in "$SIM" "$DEV"; do
-    [ -d "$d" ] || { echo "missing $d — build that slice first"; exit 1; }
-done
+[ -d "$DEV" ] || { echo "missing $DEV — build the device slice first"; exit 1; }
+HAVE_SIM=1
+[ -d "$SIM" ] || { HAVE_SIM=0; echo "note: no simulator slice at $SIM — packaging device-only xcframeworks"; }
 
 # Wrap one dylib in a flat iOS .framework: binary named after the framework, install
 # name @rpath/<name>.framework/<name>, inter-lib deps rewritten to the framework paths,
@@ -64,13 +65,19 @@ PLIST
 
 rm -rf "$WORK" "$OUT"; mkdir -p "$WORK/device" "$WORK/sim" "$OUT"
 for name in $LIBS; do
-    echo "==> $name.framework (device + sim) → xcframework"
     make_framework "$DEV/$name.dylib" "$name" "$WORK/device" "iPhoneOS" 2
-    make_framework "$SIM/$name.dylib" "$name" "$WORK/sim"    "iPhoneSimulator" 7
-    xcodebuild -create-xcframework \
-        -framework "$WORK/device/$name.framework" -debug-symbols "$WORK/device/$name.framework.dSYM" \
-        -framework "$WORK/sim/$name.framework"    -debug-symbols "$WORK/sim/$name.framework.dSYM" \
-        -output "$OUT/$name.xcframework" >/dev/null
+    ARGS=(-framework "$WORK/device/$name.framework" -debug-symbols "$WORK/device/$name.framework.dSYM")
+    if [ "$HAVE_SIM" = 1 ]; then
+        echo "==> $name.framework (device + sim) → xcframework"
+        make_framework "$SIM/$name.dylib" "$name" "$WORK/sim" "iPhoneSimulator" 7
+        ARGS+=(-framework "$WORK/sim/$name.framework" -debug-symbols "$WORK/sim/$name.framework.dSYM")
+    else
+        echo "==> $name.framework (device only) → xcframework"
+    fi
+    xcodebuild -create-xcframework "${ARGS[@]}" -output "$OUT/$name.xcframework" >/dev/null
 done
 rm -rf "$WORK"
+# One header tree next to the xcframeworks, so the project spec does not depend on
+# which slice was built. The headers are identical across slices.
+rm -rf "$OUT/include"; cp -R "$DEV/../include" "$OUT/include"
 echo "==> done:"; ls "$OUT"

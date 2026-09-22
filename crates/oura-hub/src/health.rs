@@ -111,7 +111,27 @@ fn day_json(rows: &[HealthSample], ymd: &str, tz_s: i64) -> Value {
     Value::Object(day)
 }
 
-/// The last sleep: the source with the most asleep time in the last 48 h wins.
+/// A gap longer than this between two sleep rows starts a new sleep session.
+const SLEEP_SESSION_GAP_S: f64 = 3.0 * 3600.0;
+
+/// Split one source's sleep rows (any order) into sessions and return the latest.
+fn latest_session<'a>(mut rs: Vec<&'a HealthSample>) -> Vec<&'a HealthSample> {
+    rs.sort_by(|a, b| a.start_unix.total_cmp(&b.start_unix));
+    let mut sessions: Vec<Vec<&HealthSample>> = Vec::new();
+    let mut session_end = f64::NEG_INFINITY;
+    for r in rs {
+        if sessions.is_empty() || r.start_unix - session_end > SLEEP_SESSION_GAP_S {
+            sessions.push(Vec::new());
+        }
+        sessions.last_mut().unwrap().push(r);
+        session_end = session_end.max(r.end_unix);
+    }
+    sessions.pop().unwrap_or_default()
+}
+
+/// The last sleep session: per source, rows in the last 48 h are split into sessions
+/// (a gap over three hours starts a new one) and the latest session is kept; the
+/// source whose latest session has the most asleep time wins.
 fn last_sleep(rows: &[HealthSample], now_unix: i64) -> Value {
     let floor = now_unix as f64 - 48.0 * 3600.0;
     let mut by_source: BTreeMap<String, Vec<&HealthSample>> = BTreeMap::new();
@@ -124,9 +144,11 @@ fn last_sleep(rows: &[HealthSample], now_unix: i64) -> Value {
             .map(|r| r.end_unix - r.start_unix)
             .sum()
     };
-    let Some((_, rs)) = by_source.iter().max_by(|a, b| score(a.1).total_cmp(&score(b.1))) else {
+    let sessions: Vec<Vec<&HealthSample>> = by_source.into_values().map(latest_session).collect();
+    let Some(rs) = sessions.iter().max_by(|a, b| score(a).total_cmp(&score(b))) else {
         return Value::Null;
     };
+    let rs = rs.as_slice();
     let start = rs.iter().map(|r| r.start_unix).fold(f64::INFINITY, f64::min);
     let end = rs.iter().map(|r| r.end_unix).fold(f64::NEG_INFINITY, f64::max);
     let minutes = |cat: &str| -> f64 {
@@ -298,6 +320,27 @@ mod tests {
         assert_eq!(wk["kcal"], 512.0);
         assert_eq!(wk["distance_m"], 8012.0);
         assert_eq!(wk["duration_min"], 60.0);
+    }
+
+    #[test]
+    fn last_sleep_is_the_latest_session_not_two_nights_added_up() {
+        let t = NOW as f64;
+        let mut v = Vec::new();
+        let mut sl = |uuid: &str, start: f64, len: f64, cat: &str| {
+            let mut r = s(uuid, "sleep_analysis", start, start + len, 0.0, "com.apple.watch");
+            r.value = None;
+            r.category = Some(cat.into());
+            v.push(r);
+        };
+        // the night before: 8 h asleep, ended 30 h ago
+        sl("a1", t - 38.0 * 3600.0, 8.0 * 3600.0, "asleep_core");
+        // last night: 6 h asleep in two rows, ended 6 h ago
+        sl("b1", t - 12.0 * 3600.0, 3.0 * 3600.0, "asleep_core");
+        sl("b2", t - 9.0 * 3600.0, 3.0 * 3600.0, "asleep_rem");
+        let w = watch_status(&v, NOW, 0);
+        assert_eq!(w["last_sleep"]["asleep_min"], 360.0);
+        assert_eq!(w["last_sleep"]["in_bed_min"], 360.0);
+        assert_eq!(w["last_sleep"]["end_unix"], NOW - 6 * 3600);
     }
 
     #[test]

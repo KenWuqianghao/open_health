@@ -350,7 +350,7 @@ struct RootView: View {
     @State private var report: ReportSel?
     @State private var showAllDays = false
     @State private var showSync = false
-    @State private var showPairing = !RingSync.shared.isPaired && Keychain.loadKey() == nil
+    @State private var showPairing = !RingSync.shared.isPaired
     @State private var showProfile = false
     @State private var showSleepDebt = false
     @State private var vital: VitalKind?

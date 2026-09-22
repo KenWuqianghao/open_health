@@ -19,6 +19,23 @@ final class PairingStateTests: XCTestCase {
         XCTAssertNil(PairedRingStore.load())
     }
 
+    func testKeyIsKeptOnceTheRingMayHoldIt() {
+        // Before the install stage a failure means the ring never saw the key.
+        XCTAssertFalse(RingPairing.keyMayBeOnRing(afterStage: ""))
+        XCTAssertFalse(RingPairing.keyMayBeOnRing(afterStage: "identify"))
+        XCTAssertFalse(RingPairing.keyMayBeOnRing(afterStage: "probe"))
+        // From the install stage on, the ring may already hold the key: keep it.
+        for stage in ["install_key", "verify", "time", "battery", "features", "done"] {
+            XCTAssertTrue(RingPairing.keyMayBeOnRing(afterStage: stage), stage)
+        }
+    }
+
+    func testAuthKeyFrameIsRedactedInTheTranscript() {
+        var frame = Data([0x24, 0x10]); frame.append(Data(repeating: 0xab, count: 16))
+        XCTAssertEqual(BLETransport.loggable(frame), "2410 <auth key redacted>")
+        XCTAssertEqual(BLETransport.loggable(Data([0x2f, 0x01, 0x2b])), "2f012b")
+    }
+
     func testLinkPolicyDefaultsToPark() {
         UserDefaults.standard.removeObject(forKey: "ring.link-policy")
         XCTAssertEqual(SyncSettings.linkPolicy, .park)

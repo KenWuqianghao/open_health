@@ -50,7 +50,7 @@ struct PairingView: View {
             Text("Pair your ring").font(Obs.serif(24)).foregroundStyle(Obs.ink)
             para("A ring accepts a new key only while it is factory-reset. This app makes its own key on this iPhone and keeps it in the Keychain.")
             step(1, "Factory-reset the ring. In the official Oura app, remove the ring, then fully close that app. Or use the charger reset described in the docs.")
-            step(2, "Put the ring on its charger next to this iPhone. A reset ring shows no name in the scan — that is normal.")
+            step(2, "Put the ring on its charger next to this iPhone. A reset ring may show no name, or “Oura” plus its serial — both are normal.")
             step(3, "Turn off Bluetooth on any other phone that has the official Oura app. The ring holds one link at a time.")
             step(4, "On Ring 3, iOS may show a Bluetooth pairing request. Accept it.")
             primary("Scan for rings") { Task { await pairing.startScan() } }

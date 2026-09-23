@@ -42,9 +42,12 @@ The setting "After a sync" in the Sync screen has two values:
   quiet. iOS can wake the app when the ring sends data. The next refresh task needs
   no connect step.
 - **Release the ring after each sync**. The app disconnects and asks iOS to
-  reconnect later. Use this if you also sync the same ring from the desktop client.
-  The ring has one link. A wake that finds no new data waits 15 minutes before it
-  asks iOS to reconnect again.
+  reconnect 15 minutes later. Use this if you also sync the same ring from the
+  desktop client. The ring has one link.
+
+A ring that reconnects within 10 minutes of a completed sync does not start a new
+sync: a ring on its charger reconnects within seconds, and a worn ring never stops
+producing events, so the app would otherwise sync in a loop.
 
 ## How the app finds the ring again
 

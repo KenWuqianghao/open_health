@@ -70,6 +70,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var otherDevices = Set<UUID>()
     private var powerWaiters: [CheckedContinuation<Void, Error>] = []
     private var holdOffUntil = Date.distantPast
+    private var holdOffTimer: DispatchWorkItem?
     private var parkedWakeTimer: DispatchWorkItem?
     private var armScanning = false
 
@@ -338,6 +339,16 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         lock.lock()
         guard case .free = ownership else { lock.unlock(); return }
         if Date() < holdOffUntil {
+            // Arm again when the hold-off ends; nothing else would.
+            if holdOffTimer == nil {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock(); self.holdOffTimer = nil; self.lock.unlock()
+                    self.arm()
+                }
+                holdOffTimer = work
+                queue.asyncAfter(deadline: .now() + holdOffUntil.timeIntervalSinceNow, execute: work)
+            }
             lock.unlock()
             dlog("ble", "arm skipped — reconnect hold-off until \(holdOffUntil)")
             return
@@ -431,6 +442,20 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             dlog("ble", "disconnected — ring link released (\(policy.rawValue))")
             arm()
         }
+    }
+
+    /// The ring came back but no sync is due. Keep a parked link as it is; with the
+    /// release policy drop it and wait `holdOff` before arming again.
+    func settle(policy: LinkPolicy, holdOff: TimeInterval) {
+        lock.lock()
+        guard case .parked(let p) = ownership else { lock.unlock(); return }
+        if policy == .park { lock.unlock(); return }
+        ownership = .free
+        holdOffUntil = Date().addingTimeInterval(holdOff)
+        lock.unlock()
+        central.cancelPeripheralConnection(p)
+        dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff / 60)) min")
+        arm()
     }
 
     private func park(_ p: CBPeripheral) {

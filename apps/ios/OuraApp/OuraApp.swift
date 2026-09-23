@@ -148,20 +148,22 @@ struct AllDaysView: View {
     var body: some View {
         List(s.days, id: \.self) { day in
             NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
-                        Spacer()
-                        if let sc = s.scores?.days[day] {
-                            HStack(spacing: 10) {
-                                ForEach(ScoreKind.allCases) { kind in
-                                    if let v = sc.score(kind)?.score {
-                                        Label("\(Int(v.rounded()))", systemImage: kind.icon)
-                                            .font(.caption.weight(.medium)).monospacedDigit()
-                                            .foregroundStyle(kind.tint)
-                                            .labelStyle(.titleAndIcon)
-                                            .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
+                    if let sc = s.scores?.days[day] {
+                        // one pill per score, never wrapped: the row is its own line
+                        HStack(spacing: 6) {
+                            ForEach(ScoreKind.allCases) { kind in
+                                if let v = sc.score(kind)?.score {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: kind.icon).font(.caption2)
+                                        Text("\(Int(v.rounded()))").font(.caption.weight(.semibold)).monospacedDigit()
                                     }
+                                    .foregroundStyle(kind.tint)
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(kind.tint.opacity(0.12), in: Capsule())
+                                    .fixedSize()
+                                    .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
                                 }
                             }
                         }

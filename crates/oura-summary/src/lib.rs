@@ -1212,6 +1212,18 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
                     );
                 }
             }
+            "spo2_event" => {
+                // Gen 3 and Gen 2 report the firmware's own SpO2 percent (`0x6f`);
+                // only Ring 5 sends the raw R ratio above. Same 85–100 window the
+                // Health export applies, so a 0 or 0xff placeholder never counts.
+                if let Some(a) = v["spo2_percent"].as_array() {
+                    nights[idx].spo2.extend(
+                        a.iter()
+                            .filter_map(|x| x.as_f64())
+                            .filter(|x| (85.0..=100.0).contains(x)),
+                    );
+                }
+            }
             "motion_event" => {
                 // seconds of motion in this window — a restlessness signal aligned to
                 // the night, feeds the polysomnograph's movement lane.
@@ -1637,7 +1649,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             ),
             "daytime_hr"
         ),
-        feat("SpO2", cap_on("spo2", has("spo2_r_pi_event")), "spo2"),
+        feat("SpO2", cap_on("spo2", has("spo2_r_pi_event") || has("spo2_event")), "spo2"),
         feat(
             "Exercise HR",
             cap_on("exercise_hr", has("ehr_trace_event")),
@@ -1661,7 +1673,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
     let mut sc: std::collections::BTreeMap<&str, i64> = Default::default();
     for (_ds, tag, _j, _) in &events {
         let cat = match name_of(*tag) {
-            "spo2_r_pi_event" => Some("Blood oxygen"),
+            "spo2_r_pi_event" | "spo2_event" => Some("Blood oxygen"),
             "ibi_and_amplitude_event" | "green_ibi_quality_event" => Some("Heart beats"),
             "ehr_trace_event" | "ehr_acm_intensity_event" => Some("Exercise HR"),
             "motion_event" | "sleep_acm_period" => Some("Motion"),
@@ -1704,7 +1716,7 @@ pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Val
             has("cva_raw_ppg_data"),
             "enable cva_ppg"
         ),
-        insight("SpO2", has("spo2_r_pi_event"), "enable spo2"),
+        insight("SpO2", has("spo2_r_pi_event") || has("spo2_event"), "enable spo2"),
         insight("Activity sessions", true, ""),
         insight("HRV / resting HR", true, ""),
         insight(

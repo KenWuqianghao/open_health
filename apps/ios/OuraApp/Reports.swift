@@ -475,8 +475,9 @@ struct SleepDebtCard: View {
                 }
             }
             .card()
+            .zoomSource(Route.sleepDebt)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -745,8 +746,14 @@ struct DayReportView: View {
                     .font(.title2.bold())
                     .padding(.top, 4)
                     .accessibilityAddTraits(.isHeader)
-                if tab == .sleep { SleepReport(s: s, day: day) }
-                else { ActivityReport(s: s, day: day) }
+                Group {
+                    if tab == .sleep { SleepReport(s: s, day: day) }
+                    else { ActivityReport(s: s, day: day) }
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: tab == .sleep ? .leading : .trailing).combined(with: .opacity),
+                    removal: .opacity))
+                .id(tab)
             }
             .padding(.horizontal, Theme.gutter)
             .padding(.bottom, 32)
@@ -763,7 +770,8 @@ struct DayReportView: View {
                 .frame(maxWidth: 220)
             }
         }
-        .animation(.snappy, value: tab)
+        .animation(Motion.settle, value: tab)
+        .sensoryFeedback(.selection, trigger: tab)
     }
 }
 
@@ -800,7 +808,7 @@ struct SleepReport: View {
                     }
                 }
                 if n.hasHypnogram {
-                    StageBar(n: n).padding(.top, 4)
+                    StageBar(n: n).padding(.top, 4).reveal(delay: 0.2)
                     HStack(spacing: 14) {
                         ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
                             HStack(spacing: 5) {

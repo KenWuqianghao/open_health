@@ -57,6 +57,8 @@ struct Card: ViewModifier {
             .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
             .background(Color(.secondarySystemGroupedBackground),
                         in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+            .scrollIn()
     }
 }
 
@@ -125,12 +127,14 @@ struct BigValue: View {
             ForEach(parts.indices, id: \.self) { i in
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(parts[i].0).font(Theme.number(style)).monospacedDigit().foregroundStyle(color)
+                        .contentTransition(.numericText())
                     if !parts[i].1.isEmpty {
                         Text(parts[i].1).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                     }
                 }
             }
         }
+        .animation(Motion.snappy, value: parts.map { $0.0 })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(parts.map { "\($0.0) \($0.1)" }.joined(separator: " "))
     }
@@ -294,6 +298,7 @@ struct Sparkline: View {
         .chartLegend(.hidden)
         .frame(height: 40)
         .clipped()
+        .reveal(delay: 0.25)
         .accessibilityHidden(true)
     }
 }
@@ -334,8 +339,9 @@ struct VitalCell: View {
                 }
             }
             .card(fillHeight: true)
+            .zoomSource(Route.vital(kind))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .disabled(!hasValue)
         .accessibilityLabel(hasValue ? "\(kind.title) \(value) \(kind.unit)" : "\(kind.title), no data")
         .accessibilityHint("Shows the trend over time")
@@ -425,6 +431,8 @@ struct VitalTrendView: View {
                                         baseline: kind.baseline(in: s), accent: kind.tint,
                                         decimals: kind.decimals, unit: kind.unit)
                             .padding(.top, 4)
+                            .reveal(delay: 0.15)
+                            .animation(Motion.settle, value: period)
                     } else if all.isEmpty {
                         Text("No readings yet.").font(.subheadline).foregroundStyle(.secondary)
                     } else {
@@ -590,6 +598,7 @@ struct Hypnogram: View {
         }
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .reveal(delay: 0.2)
     }
 }
 
@@ -614,6 +623,7 @@ struct MovementRidge: View {
         .chartYAxis(.hidden)
         .chartLegend(.hidden)
         .frame(height: height)
+        .reveal(delay: 0.2)
         .accessibilityHidden(true)
     }
 }
@@ -625,22 +635,50 @@ struct ScoreRing: View {
     let tint: Color
     var size: CGFloat = 84
     var lineWidth: CGFloat = 9
+    /// Seconds to wait before filling, so a row of rings fills one after another.
+    var delay: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown: Double = 0
+
     var body: some View {
+        let fraction = CGFloat(min(1, max(0, shown / 100)))
         ZStack {
             Circle()
-                .stroke(tint.opacity(0.18), lineWidth: lineWidth)
+                .stroke(tint.opacity(0.16), lineWidth: lineWidth)
             Circle()
-                .trim(from: 0, to: CGFloat(min(1, max(0, (score ?? 0) / 100))))
-                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .trim(from: 0, to: fraction)
+                .stroke(
+                    AngularGradient(colors: [tint.opacity(0.55), tint],
+                                    center: .center,
+                                    startAngle: .degrees(0),
+                                    endAngle: .degrees(360 * Double(max(fraction, 0.01)))),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.snappy, value: score)
-            Text(score.map { "\(Int($0.rounded()))" } ?? "—")
-                .font(Theme.number(size >= 120 ? .largeTitle : .title2))
-                .monospacedDigit()
-                .foregroundStyle(score == nil ? Color.secondary : Color.primary)
+                .shadow(color: tint.opacity(score == nil ? 0 : 0.35), radius: lineWidth * 0.6)
+            Group {
+                if score != nil {
+                    EmptyView().modifier(CountingNumber(value: shown))
+                } else {
+                    Text("—")
+                }
+            }
+            .font(Theme.number(size >= 120 ? .largeTitle : .title2))
+            .monospacedDigit()
+            .foregroundStyle(score == nil ? Color.secondary : Color.primary)
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+        .onAppear { fill(to: score, delay: delay) }
+        .onChange(of: score) { _, value in fill(to: value, delay: 0) }
+    }
+
+    private func fill(to value: Double?, delay: Double) {
+        let target = value ?? 0
+        if reduceMotion {
+            shown = target
+        } else {
+            withAnimation(Motion.fill.delay(delay)) { shown = target }
+        }
     }
 }
 
@@ -655,7 +693,13 @@ struct ScoresCard: View {
                 ForEach(found, id: \.0) { kind, hit in
                     NavigationLink(value: Route.score(kind, hit?.day ?? day)) {
                         VStack(spacing: 8) {
-                            ScoreRing(score: hit?.score.score, tint: kind.tint)
+                            ScoreRing(score: hit?.score.score, tint: kind.tint,
+                                      delay: 0.2 + Double(ScoreKind.allCases.firstIndex(of: kind) ?? 0) * 0.12)
+                                // the transition source clips to its bounds; pad it so
+                                // the ring's glow is inside, then give the space back
+                                .padding(14)
+                                .zoomSource(Route.score(kind, hit?.day ?? day))
+                                .padding(-14)
                             HStack(spacing: 4) {
                                 Text(kind.title).font(.subheadline.weight(.semibold))
                                 if hit?.score.provisional == true {
@@ -678,7 +722,7 @@ struct ScoresCard: View {
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .disabled(hit == nil)
                     .accessibilityLabel("\(kind.title) score \(hit.map { "\(Int($0.score.score.rounded()))" } ?? "not available")")
                     .accessibilityHint("Shows the breakdown")
@@ -711,7 +755,7 @@ struct ScoreDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(spacing: 12) {
-                    ScoreRing(score: score?.score, tint: kind.tint, size: 150, lineWidth: 14)
+                    ScoreRing(score: score?.score, tint: kind.tint, size: 150, lineWidth: 14, delay: 0.25)
                         .padding(.top, 8)
                     if let score {
                         let band = Theme.scoreBand(score.score)
@@ -734,13 +778,13 @@ struct ScoreDetailView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             CardHeader(title: "Contributors", icon: kind.icon, tint: kind.tint)
-                            Toggle("Sources", isOn: $showSources)
+                            Toggle("Sources", isOn: $showSources.animation(Motion.snappy))
                                 .toggleStyle(.button)
                                 .controlSize(.small)
                                 .font(.caption)
                         }
-                        ForEach(score.contributors) { c in
-                            ContributorRow(c: c, tint: kind.tint, showSource: showSources)
+                        ForEach(Array(score.contributors.enumerated()), id: \.element.id) { i, c in
+                            ContributorRow(c: c, tint: kind.tint, showSource: showSources, index: i)
                         }
                     }
                     .card()
@@ -768,6 +812,9 @@ private struct ContributorRow: View {
     let c: ScoreContributor
     let tint: Color
     let showSource: Bool
+    var index = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var grown = false
     private var valueText: String? {
         guard let v = c.value else { return nil }
         let number = v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
@@ -796,14 +843,21 @@ private struct ContributorRow: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color(.tertiarySystemFill)).frame(height: 6)
                     Capsule().fill(tint.opacity(0.45 + 0.55 * min(1, c.weight * 3)))
-                        .frame(width: geo.size.width * CGFloat(c.score / 100), height: 6)
+                        .frame(width: geo.size.width * CGFloat(grown ? c.score / 100 : 0), height: 6)
                 }
             }
             .frame(height: 6)
+            .onAppear {
+                guard !grown else { return }
+                if reduceMotion { grown = true } else {
+                    withAnimation(Motion.fill.delay(0.35 + Motion.stagger(index, step: 0.07))) { grown = true }
+                }
+            }
             HStack {
                 Text("\(Int((c.weight * 100).rounded()))% of the score").font(.caption2).foregroundStyle(.tertiary)
                 if showSource {
                     Text("· \(c.source)").font(.caption2).foregroundStyle(.tertiary)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
                 }
             }
         }

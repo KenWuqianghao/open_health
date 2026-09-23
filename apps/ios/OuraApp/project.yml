@@ -93,6 +93,7 @@ targets:
       - path: Components.swift
       - path: Reports.swift
       - path: Theme.swift
+      - path: Motion.swift
       - path: BLETransport.swift
       - path: RingCentral.swift
       - path: RingSync.swift

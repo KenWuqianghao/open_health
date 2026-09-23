@@ -13,6 +13,8 @@ struct PairingView: View {
     var body: some View {
         NavigationStack {
             content
+                .animation(Motion.settle, value: pairing.step)
+                .animation(Motion.snappy, value: pairing.candidates.map(\.id))
                 .background(Color(.systemGroupedBackground))
                 .navigationTitle("Pair Ring")
                 .navigationBarTitleDisplayMode(.inline)
@@ -224,6 +226,7 @@ struct PairingView: View {
                 .font(.system(size: 56, weight: .medium))
                 .foregroundStyle(tint)
                 .symbolRenderingMode(.hierarchical)
+                .symbolEffect(.bounce, value: symbol)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .accessibilityHidden(true)
@@ -235,10 +238,18 @@ struct PairingView: View {
 
     private func busy(title: String, status: String) -> some View {
         VStack(spacing: 16) {
-            ProgressView().controlSize(.large)
+            // radio waves pulsing outward: the phone is talking to the ring
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.system(size: 56, weight: .medium))
+                .foregroundStyle(Theme.sleep)
+                .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating)
+                .padding(.bottom, 4)
+                .accessibilityHidden(true)
             Text(title).font(.title2.bold())
             Text(status).font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .contentTransition(.opacity)
+                .animation(Motion.snappy, value: status)
         }
         .padding(Theme.gutter)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

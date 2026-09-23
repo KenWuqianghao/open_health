@@ -21,23 +21,36 @@ struct SleepCard: View {
                            detail: s.night(forDay: day).map { "\($0.start ?? "—") – \($0.end ?? "—")" },
                            chevron: true)
                 if let n = s.night(forDay: day) {
-                    Text("Time in Bed").font(.subheadline).foregroundStyle(.secondary)
-                    BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")])
+                    HStack(alignment: .bottom) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Time in Bed").font(.subheadline).foregroundStyle(.secondary)
+                            BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")])
+                        }
+                        Spacer(minLength: 8)
+                        if n.hasHypnogram, let e = n.efficiency {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("Efficiency").font(.subheadline).foregroundStyle(.secondary)
+                                BigValue("\(Int(e))", "%", style: .title2)
+                            }
+                        }
+                    }
                     if n.hasHypnogram {
                         Hypnogram(stages: n.stages!, height: 34).padding(.top, 2)
                     }
                     if n.hasHypnogram {
-                        HStack(spacing: 12) {
-                            ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct)], id: \.0) { code, pct in
+                        HStack(spacing: 14) {
+                            ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
                                 HStack(spacing: 4) {
                                     Circle().fill(Theme.stage(code)).frame(width: 7, height: 7)
                                     Text("\(Theme.stageName(code)) \(Int(pct ?? 0))%")
+                                        .lineLimit(1)
                                 }
+                                .fixedSize()
                             }
-                            Spacer()
-                            if let e = n.efficiency { Text("\(Int(e))% efficient") }
+                            Spacer(minLength: 0)
                         }
                         .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                        .minimumScaleFactor(0.85)
                     }
                 } else {
                     EmptyCardState(icon: "moon.zzz", title: "No Sleep Yet",
@@ -46,7 +59,7 @@ struct SleepCard: View {
             }
             .card()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -88,7 +101,7 @@ struct ActivityCard: View {
             }
             .card()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -106,16 +119,21 @@ struct HighlightsCard: View {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
                         Text(status).font(.subheadline).foregroundStyle(.secondary)
+                            .contentTransition(.opacity)
+                            .animation(Motion.snappy, value: status)
                     }
                     .accessibilityElement(children: .combine)
-                    .transition(.opacity)
+                    .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                            removal: .opacity))
                 }
                 if let digest {
                     Text(digest).font(.body)
+                        .contentTransition(.opacity)
                 }
             }
             .card()
-            .animation(.snappy, value: status)
+            .animation(Motion.settle, value: status == nil)
+            .animation(Motion.snappy, value: digest)
         }
     }
 }
@@ -459,17 +477,31 @@ private struct SyncIndicatorButton: View {
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rotation = 0.0
+    @State private var justSynced = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .rotationEffect(.degrees(rotation))
-                .foregroundStyle(ring.busy ? Color.accentColor : (ring.wasRecentlySynced ? Theme.good : Color.primary))
+            Image(systemName: justSynced ? "checkmark" : "arrow.triangle.2.circlepath")
+                .contentTransition(.symbolEffect(.replace))
+                .rotationEffect(.degrees(justSynced ? 0 : rotation))
+                .foregroundStyle(justSynced ? Theme.good
+                                 : (ring.busy ? Color.accentColor : (ring.wasRecentlySynced ? Theme.good : Color.primary)))
         }
         .accessibilityLabel(ring.busy ? "Ring sync in progress" : "Ring sync and diagnostics")
         .accessibilityHint("Opens sync status, logs, and manual controls")
+        .sensoryFeedback(.success, trigger: justSynced) { _, now in now }
         .onAppear(perform: updateAnimation)
-        .onChange(of: ring.busy) { _, _ in updateAnimation() }
+        .onChange(of: ring.busy) { wasBusy, isBusy in
+            updateAnimation()
+            // A finished sync confirms itself: the arrows become a checkmark for a
+            // moment, then morph back.
+            if wasBusy && !isBusy && ring.lastReport != nil {
+                withAnimation(Motion.snappy) { justSynced = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                    withAnimation(Motion.snappy) { justSynced = false }
+                }
+            }
+        }
         .onChange(of: reduceMotion) { _, _ in updateAnimation() }
     }
 
@@ -497,6 +529,7 @@ struct RootView: View {
     @State private var isRefreshingSummary = false
     @ObservedObject private var ring = RingSync.shared
     @StateObject private var modelProgress = ModelProgress()
+    @Namespace private var zoom
 
     private func f(_ v: Double?, _ fallback: String = "—") -> String {
         v.map { "\(Int($0))" } ?? fallback
@@ -536,18 +569,22 @@ struct RootView: View {
             }
             .navigationDestination(for: Route.self) { route in
                 if let s {
+                    // Details with a single source card zoom out of it (iOS 18+);
+                    // day reports open from two places and keep the standard push.
                     switch route {
                     case .report(let sel): DayReportView(s: s, day: sel.day, tab: sel.sleep ? .sleep : .activity)
-                    case .vital(let kind): VitalTrendView(s: s, kind: kind)
+                    case .vital(let kind): VitalTrendView(s: s, kind: kind).zoomDestination(route, in: zoom)
                     case .score(let kind, let day):
                         ScoreDetailView(kind: kind, day: day, score: s.scores?.days[day]?.score(kind))
+                            .zoomDestination(route, in: zoom)
                     case .allDays: AllDaysView(s: s)
                     case .sleepDebt:
-                        if let debt = s.sleepDebt { SleepDebtDetail(debt: debt) }
+                        if let debt = s.sleepDebt { SleepDebtDetail(debt: debt).zoomDestination(route, in: zoom) }
                     }
                 }
             }
         }
+        .environment(\.zoomNamespace, zoom)
         .sheet(isPresented: $showSync) {
             SyncView(ring: ring, onSynced: refreshAfterSync, onReset: resetAndReload,
                      onPair: { showSync = false; showPairing = true })
@@ -692,23 +729,24 @@ struct RootView: View {
             let latestHR = s.vitals.hr
             let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
                     // highlights: the digest line, and the sync / analysis status while
                     // the ring or the models are working (HIG: describe the work, not the wait)
                     HighlightsCard(digest: s.digest,
                                    status: ring.busy ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
                                        : (isRefreshingSummary ? (modelProgress.label.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Updating your summary…") : nil))
+                        .entrance(0)
 
                     // today — last night's sleep + that day's activity as one unit,
                     // the hero of the home; tap either card for its report.
                     if let day = s.days.first {
-                        SectionTitle(Fmt.dayLabel(day))
-                        ScoresCard(s: s, day: day)
-                        SleepCard(s: s, day: day)
-                        ActivityCard(s: s, day: day)
+                        SectionTitle(Fmt.dayLabel(day)).entrance(1)
+                        ScoresCard(s: s, day: day).entrance(2)
+                        SleepCard(s: s, day: day).entrance(3)
+                        ActivityCard(s: s, day: day).entrance(4)
                     }
 
-                    SectionTitle("Vitals")
+                    SectionTitle("Vitals").entrance(5)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                         VitalCell(kind: .hrv, value: f(s.vitals.hrv.latest),
                                   delta: s.vitals.hrv.delta_pct, series: s.vitals.hrv.series,
@@ -727,6 +765,7 @@ struct RootView: View {
                                   series: recentOxygen,
                                   detail: latestOxygen.map { latestLabel(date: s.wakeYmd($0)) })
                     }
+                    .entrance(6)
 
                     if s.sleepDebt != nil || s.illness != nil {
                         SectionTitle("Recovery")
@@ -778,7 +817,7 @@ struct RootView: View {
                             }
                             .card()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable)
                     }
 
                     // on-device model failures (empty unless a torch model genuinely
@@ -820,10 +859,22 @@ struct RootView: View {
                 }
                 .padding(.horizontal, Theme.gutter)
                 .padding(.bottom, 32)
+                // A soft wash of the readiness hue behind the large title, like the
+                // category headers in Health. It lives in the scroll content, so it
+                // scrolls away with the cards.
+                .background(alignment: .top) {
+                    LinearGradient(colors: [Theme.readiness.opacity(0.24), Theme.sleep.opacity(0.08), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 560)
+                        .offset(y: -280)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
             .refreshable {
                 if ring.isPaired { _ = await ring.run() } else { load(force: true) }
             }
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: ring.busy) { _, now in now }
         }
     }
 }

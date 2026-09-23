@@ -242,9 +242,19 @@ actor SyncCoordinator {
 
     /// The armed connect fired, a restored session came back connected, or a parked
     /// ring spoke: sync over the link we already have.
+    /// A ring on its charger reconnects within seconds of being released, and a
+    /// worn ring never stops producing events, so "new data" alone cannot gate a
+    /// wake. No ring-initiated sync starts this soon after a completed one.
+    static let wakeCooldown: TimeInterval = 10 * 60
+
     func handleUnsolicitedConnect(_ peripheral: CBPeripheral) {
         guard current == nil else {
             dlog("sync", "unsolicited connect while busy — ignored")
+            return
+        }
+        if let last = lastSuccessAt, Date().timeIntervalSince(last) < Self.wakeCooldown {
+            dlog("sync", "ring reconnected \(Int(Date().timeIntervalSince(last))) s after a sync — waiting out the \(Int(Self.wakeCooldown / 60)) min cooldown")
+            RingCentral.shared.settle(policy: SyncSettings.linkPolicy, holdOff: Self.wakeCooldown)
             return
         }
         let transport = RingCentral.shared.claim(peripheral, for: .bleRestore)
@@ -425,8 +435,10 @@ actor SyncCoordinator {
         }
         await hooks.afterSync(trigger, outcome.report, policy)
         if let t = transport {
-            // A wake that found nothing must not loop on the charger.
-            let holdOff: TimeInterval = (trigger == .bleRestore && outcome.report?.inserted == 0) ? 15 * 60 : 0
+            // With the release policy the ring reconnects the moment we drop it, so
+            // the re-arm waits; a parked link needs no hold-off (wakes are gated by
+            // `wakeCooldown`).
+            let holdOff: TimeInterval = SyncSettings.linkPolicy == .release ? 15 * 60 : 0
             RingCentral.shared.release(t, policy: SyncSettings.linkPolicy, holdOff: holdOff)
         } else {
             RingCentral.shared.arm()

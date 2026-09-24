@@ -146,7 +146,7 @@ which is why Oura's own app has no per-night HRV trend either.
 - **Health hub push**: iOS pushes the summary, the raw ring rows, and the Apple
   Health samples other sources wrote after each sync (`HubPush.swift`,
   `HealthReader.swift`, Settings → Health hub). The web side has no push; the desktop
-  uses `oura push` for the summary only. See `docs/health-hub.md`.
+  uses `oura push` for the summary only. See https://github.com/KenWuqianghao/oura-hub (docs/health-hub.md there).
 - **Polysomnograph crosshair**: web has a hover crosshair; iOS uses a touch scrubber
   (drag across the lanes) — same idea, adapted to the input.
 - **DNA explorer** (`/dna`): reads genome `*.vcf.gz` files and scores single-SNP **traits**

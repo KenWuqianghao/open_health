@@ -6,7 +6,6 @@ members = [
     "crates/oura-core",
     "crates/oura-summary",
     "crates/oura-dna",
-    "crates/oura-hub",
 ]
 
 [workspace.package]

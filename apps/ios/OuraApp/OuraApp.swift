@@ -611,8 +611,10 @@ struct RootView: View {
                     case .report(let sel): DayReportView(s: s, day: sel.day, tab: sel.sleep ? .sleep : .activity)
                     case .vital(let kind): VitalTrendView(s: s, kind: kind).zoomDestination(route, in: zoom)
                     case .score(let kind, let day):
-                        ScoreDetailView(kind: kind, day: day, score: s.scores?.days[day]?.score(kind))
+                        ScoreDetailView(kind: kind, day: day, score: s.scores?.days[day]?.score(kind),
+                                        history: s.scoreSeries(kind))
                             .zoomDestination(route, in: zoom)
+                    case .trends: TrendsView(s: s).zoomDestination(route, in: zoom)
                     case .allDays: AllDaysView(s: s)
                     case .sleepDebt:
                         if let debt = s.sleepDebt { SleepDebtDetail(debt: debt).zoomDestination(route, in: zoom) }
@@ -804,6 +806,9 @@ struct RootView: View {
                                   detail: latestOxygen.map { latestLabel(date: s.wakeYmd($0)) })
                     }
                     .entrance(6)
+
+                    SectionTitle("Trends")
+                    TrendsCard(s: s)
 
                     if s.sleepDebt != nil || s.illness != nil {
                         SectionTitle("Recovery")

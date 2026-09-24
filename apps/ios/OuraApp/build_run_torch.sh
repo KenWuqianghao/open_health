@@ -37,7 +37,7 @@ xcrun -sdk iphonesimulator swiftc \
     -target "$TRIPLE" -parse-as-library -D TORCH \
     -import-objc-header "$APPDIR/TorchBridge.h" \
     -I "$GEN/headers" \
-    "$GEN/oura_core.swift" "$APPDIR/Theme.swift" "$APPDIR/Motion.swift" "$APPDIR/OuraApp.swift" \
+    "$GEN/oura_core.swift" "$APPDIR/Theme.swift" "$APPDIR/Motion.swift" "$APPDIR/Trends.swift" "$APPDIR/OuraApp.swift" \
     "$APPDIR/Models.swift" "$APPDIR/Core.swift" "$APPDIR/Components.swift" "$APPDIR/Reports.swift" \
     "$APPDIR/BLETransport.swift" "$APPDIR/RingCentral.swift" "$APPDIR/RingSync.swift" \
     "$APPDIR/SyncCoordinator.swift" "$APPDIR/BackgroundSync.swift" "$APPDIR/AppDelegate.swift" "$APPDIR/AppHooks.swift" \

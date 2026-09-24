@@ -746,6 +746,13 @@ struct DayReportView: View {
                     .font(.title2.bold())
                     .padding(.top, 4)
                     .accessibilityAddTraits(.isHeader)
+                // in the page, not the toolbar: the glass capsule there squeezes it
+                Picker("Report", selection: $tab) {
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.large)
+                .padding(.bottom, 4)
                 Group {
                     if tab == .sleep { SleepReport(s: s, day: day) }
                     else { ActivityReport(s: s, day: day) }
@@ -761,15 +768,6 @@ struct DayReportView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(Fmt.dayLabel(day))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("Report", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 220)
-            }
-        }
         .animation(Motion.settle, value: tab)
         .sensoryFeedback(.selection, trigger: tab)
     }

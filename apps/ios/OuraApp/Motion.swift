@@ -76,8 +76,12 @@ private struct Reveal: ViewModifier {
     func body(content: Content) -> some View {
         content
             .mask(alignment: .leading) {
+                // taller than the view, so axis labels that overhang the plot
+                // (a "100" on the top gridline) are never clipped
                 GeometryReader { geo in
-                    Rectangle().frame(width: geo.size.width * progress)
+                    Rectangle()
+                        .frame(width: geo.size.width * progress + 1, height: geo.size.height + 48)
+                        .offset(y: -24)
                 }
             }
             .onAppear {

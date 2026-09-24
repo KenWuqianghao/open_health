@@ -363,6 +363,7 @@ enum Route: Hashable {
     case report(ReportSel)
     case vital(VitalKind)
     case score(ScoreKind, String)
+    case trends
     case allDays
     case sleepDebt
 }

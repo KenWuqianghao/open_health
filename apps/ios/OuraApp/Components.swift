@@ -762,6 +762,7 @@ struct ScoreDetailView: View {
     let kind: ScoreKind
     let day: String
     let score: DailyScore?
+    var history: [DatedValue] = []
     @State private var showSources = false
 
     var body: some View {
@@ -786,6 +787,9 @@ struct ScoreDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .card()
+
+                TrendCard(title: "Past 30 Days", icon: "chart.bar.fill", tint: kind.tint,
+                          points: history, domain: trendWindow(days: 30, earliest: nil), yDomain: 0...100)
 
                 if let score {
                     VStack(alignment: .leading, spacing: 14) {

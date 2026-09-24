@@ -94,6 +94,7 @@ targets:
       - path: Reports.swift
       - path: Theme.swift
       - path: Motion.swift
+      - path: Trends.swift
       - path: BLETransport.swift
       - path: RingCentral.swift
       - path: RingSync.swift

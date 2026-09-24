@@ -21,6 +21,26 @@ This page is the full path from a clean Mac to a synced ring. Follow it in order
 Remove the official Oura app from the phone, or turn off its Bluetooth permission.
 The ring keeps one link at a time.
 
+## Quick path: one command
+
+On the phone, turn on Settings → Privacy & Security → Developer Mode and restart. In
+Xcode → Settings → Accounts, add your Apple ID once. Connect the phone with the cable,
+unlock it, and tap **Trust**. Then:
+
+```bash
+git clone https://github.com/KenWuqianghao/open_health.git && cd open_health && ./apps/ios/install.sh
+```
+
+The script installs `xcodegen` and Rust 1.93 when they are missing, builds the Rust
+core, generates the Xcode project, finds your team and your iPhone, signs, installs,
+and launches the app. It keeps the team and the bundle identifier in
+`apps/ios/.install.env`. Run it again every 7 days (free Apple ID) or after a pull.
+`./apps/ios/install.sh --check` checks the tools, the team, and the phone without a
+build. On the first launch, trust your Apple ID on the phone (see
+[First launch](#first-launch)), then go to [4. Prepare the ring](#4-prepare-the-ring).
+
+Steps 1 to 3 below are what the script does, for a build by hand.
+
 ## 1. Clone and build the Rust core
 
 ```bash
@@ -148,6 +168,15 @@ Not written: readiness, sleep and activity scores, skin temperature, distance.
 
 Every day is deleted and rewritten as one unit, so a second export never duplicates.
 **Remove Open Oura data from Health** deletes everything the app wrote.
+
+## Optional: your own health hub
+
+The [oura-hub](https://github.com/KenWuqianghao/oura-hub) keeps a copy of your data on
+a server that is always on, and lets an AI agent read it over MCP. Install it with
+`./deploy/install.sh` on the server, open the sign-in link it prints, and scan the QR
+code on its **Connect** page with the Camera. The app asks, then sends the ring data
+after every sync. Tap **Include Apple Health data** in Settings → Health hub to add
+the Apple Watch.
 
 ## 7. Day to day
 

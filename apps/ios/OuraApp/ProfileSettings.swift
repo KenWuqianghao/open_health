@@ -293,6 +293,7 @@ struct ProfileSettingsView: View {
                             .autocorrectionDisabled()
                         SecureField("Token", text: $hubToken)
                             .onChange(of: hubToken) { _, value in hub.setToken(value) }
+                            .onReceive(hub.$hasToken) { _ in hubToken = HubSettings.token ?? "" }
                         Toggle("Include Apple Health data (Watch)", isOn: Binding(
                             get: { healthRead.enabled },
                             set: { on in Task { await healthRead.setEnabled(on) } }
@@ -312,7 +313,7 @@ struct ProfileSettingsView: View {
                 } header: {
                     Text("Health hub")
                 } footer: {
-                    Text("After each sync the app sends the summary and every new ring event to your own server (oura-hub). With Apple Health on, it also sends the samples other apps and your Apple Watch wrote (never its own export). An agent can read your status, and the data is backed up, while this iPhone is off. The token is kept in the Keychain.")
+                    Text("To connect, open your hub in a browser, go to Connect, and scan the QR code with the Camera app. After each sync the app sends the summary and every new ring event to your own server (oura-hub). With Apple Health on, it also sends the samples other apps and your Apple Watch wrote (never its own export). An agent can read your status, and the data is backed up, while this iPhone is off. The token is kept in the Keychain.")
                 }
             }
             .fullScreenCover(isPresented: $showPairing) { PairingView(onPaired: { _ in }) }
@@ -333,3 +334,4 @@ struct ProfileSettingsView: View {
         }
     }
 }
+

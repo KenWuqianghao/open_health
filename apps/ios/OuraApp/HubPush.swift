@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import UIKit
 
 // The health hub: an always-on server (crates/oura-hub) that keeps the summary for
 // agents and a replica of the raw ring rows as a backup. This file holds the
@@ -60,6 +61,65 @@ enum HubSettings {
               let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = u.host, !host.isEmpty else { return nil }
         return u
+    }
+}
+
+/// A setup link from the hub's Connect page, usually scanned as a QR code:
+/// `openoura://hub?url=<hub base URL>&token=<token>`. Any web page can make such a
+/// link, so the app always asks before it sends data to the host in it.
+struct HubLink: Equatable {
+    let url: String
+    let token: String
+
+    var host: String { URL(string: url)?.host ?? url }
+
+    static func parse(_ link: URL) -> HubLink? {
+        guard link.scheme?.lowercased() == "openoura", link.host?.lowercased() == "hub",
+              let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems,
+              let base = items.first(where: { $0.name == "url" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let token = items.first(where: { $0.name == "token" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              token.count >= 16,
+              HubSettings.endpoint(base: base, path: "health") != nil
+        else { return nil }
+        return HubLink(url: base, token: token)
+    }
+}
+
+/// Asks before a scanned link takes effect. A UIKit alert on the top screen, so it
+/// shows over the pairing cover and the settings sheet alike. A screen that closes
+/// under the alert (the pairing cover right after launch) takes the alert with it;
+/// the prompt then asks again on the screen below.
+enum HubLinkPrompt {
+    @MainActor static func ask(_ link: HubLink, attempt: Int = 0) {
+        let retry = { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { ask(link, attempt: attempt + 1) } }
+        guard attempt < 30 else { dlog("hub", "gave up asking about the hub link"); return }
+        guard let top = topController(), !top.isBeingPresented, !top.isBeingDismissed,
+              !(top is UIAlertController) else { return retry() }
+        var answered = false
+        let alert = UIAlertController(
+            title: "Connect to your hub?",
+            message: "Open Oura will send your ring data and summary to \(link.host) after every sync. Connect only to a hub you run.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in answered = true })
+        let connect = UIAlertAction(title: "Connect", style: .default) { _ in
+            answered = true
+            HubPusher.shared.connect(link)
+        }
+        alert.addAction(connect)
+        alert.preferredAction = connect
+        top.present(alert, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if !answered && alert.presentingViewController == nil { ask(link, attempt: attempt + 1) }
+        }
+    }
+
+    @MainActor private static func topController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        guard var vc = scene?.keyWindow?.rootViewController else { return nil }
+        while let next = vc.presentedViewController { vc = next }
+        return vc
     }
 }
 
@@ -270,6 +330,18 @@ final class HubPusher: ObservableObject {
             let models = SummaryCache.load() ?? built.summary
             await self.pushAll(rawJson: built.json, models: models, reason: "manual", deadline: 120)
         }
+    }
+
+    /// Apply an accepted setup link: switch the hub on and send everything. A new
+    /// hub address starts the ring replica from the first row.
+    func connect(_ link: HubLink) {
+        let old = HubSettings.endpoint(base: url, path: "")
+        if old != HubSettings.endpoint(base: link.url, path: "") { HubSettings.resetReplication() }
+        url = link.url
+        setToken(link.token)
+        enabled = true
+        dlog("hub", "connected by link to \(link.host)")
+        pushNow()
     }
 
     func sendAllRingDataAgain() {

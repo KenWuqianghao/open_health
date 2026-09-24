@@ -28,5 +28,6 @@ apps/ios/.libtorch-frameworks-build/
 apps/ios/OuraApp/build/
 apps/ios/build/
 apps/ios/DerivedData/
+apps/ios/.install.env
 local/
 .hub-token

@@ -96,4 +96,21 @@ final class HubPushTests: XCTestCase {
         XCTAssertEqual(HubPayload.sha256(Data("a".utf8)),
                        "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb")
     }
+
+    func testHubLinkParsesTheConnectQRCode() {
+        let token = "0123456789abcdef0123456789abcdef"
+        let link = HubLink.parse(URL(string: "openoura://hub?url=https%3A%2F%2Fbox.tail1.ts.net&token=\(token)")!)
+        XCTAssertEqual(link, HubLink(url: "https://box.tail1.ts.net", token: token))
+        XCTAssertEqual(link?.host, "box.tail1.ts.net")
+        XCTAssertNotNil(HubLink.parse(URL(string: "openoura://hub?url=http://box.tail1.ts.net:8787&token=\(token)")!))
+    }
+
+    func testHubLinkRejectsBadLinks() {
+        let token = "0123456789abcdef0123456789abcdef"
+        XCTAssertNil(HubLink.parse(URL(string: "https://hub?url=https://a.b&token=\(token)")!))       // wrong scheme
+        XCTAssertNil(HubLink.parse(URL(string: "openoura://sync?url=https://a.b&token=\(token)")!))   // wrong action
+        XCTAssertNil(HubLink.parse(URL(string: "openoura://hub?url=https://a.b&token=short")!))          // short token
+        XCTAssertNil(HubLink.parse(URL(string: "openoura://hub?url=ftp://a.b&token=\(token)")!))        // not http(s)
+        XCTAssertNil(HubLink.parse(URL(string: "openoura://hub?token=\(token)")!))                      // no URL
+    }
 }

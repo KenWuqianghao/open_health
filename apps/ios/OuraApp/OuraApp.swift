@@ -927,7 +927,13 @@ struct OuraApp: App {
     @Environment(\.scenePhase) private var scenePhase
     init() { DiagStore.shared.bootstrap() }
     var body: some Scene {
-        WindowGroup { RootView() }
+        WindowGroup {
+            RootView()
+                .onOpenURL { url in
+                    if let link = HubLink.parse(url) { HubLinkPrompt.ask(link) }
+                    else { dlog("hub", "ignored link \(url.scheme ?? "")://\(url.host ?? "")") }
+                }
+        }
             .onChange(of: scenePhase) { _, phase in
                 Task { await SyncCoordinator.shared.scenePhaseChanged(phase) }
             }

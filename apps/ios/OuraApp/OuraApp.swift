@@ -14,6 +14,7 @@ import SwiftUI
 struct SleepCard: View {
     let s: Summary
     let day: String
+    @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
         NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
             VStack(alignment: .leading, spacing: 10) {
@@ -21,14 +22,14 @@ struct SleepCard: View {
                            detail: s.night(forDay: day).map { "\($0.start ?? "—") – \($0.end ?? "—")" },
                            chevron: true)
                 if let n = s.night(forDay: day) {
-                    HStack(alignment: .bottom) {
+                    FitStack(alignment: .bottom, spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Time in Bed").font(.subheadline).foregroundStyle(.secondary)
                             BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")])
                         }
                         Spacer(minLength: 8)
                         if n.hasHypnogram, let e = n.efficiency {
-                            VStack(alignment: .trailing, spacing: 2) {
+                            VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 2) {
                                 Text("Efficiency").font(.subheadline).foregroundStyle(.secondary)
                                 BigValue("\(Int(e))", "%", style: .title2)
                             }
@@ -38,19 +39,23 @@ struct SleepCard: View {
                         Hypnogram(stages: n.stages!, height: 34).padding(.top, 2)
                     }
                     if n.hasHypnogram {
-                        HStack(spacing: 14) {
-                            ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
-                                HStack(spacing: 4) {
-                                    Circle().fill(Theme.stage(code)).frame(width: 7, height: 7)
-                                    Text("\(Theme.stageName(code)) \(Int(pct ?? 0))%")
-                                        .lineLimit(1)
-                                }
-                                .fixedSize()
+                        let stages = [(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)]
+                        let item = { (code: Int, pct: Double?) in
+                            HStack(spacing: 4) {
+                                Circle().fill(Theme.stage(code)).frame(width: 7, height: 7)
+                                Text("\(Theme.stageName(code)) \(Int(pct ?? 0))%")
                             }
-                            Spacer(minLength: 0)
+                        }
+                        // one line when it fits; a column when the text is large
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 14) {
+                                ForEach(stages, id: \.0) { item($0.0, $0.1).fixedSize() }
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(stages, id: \.0) { item($0.0, $0.1) }
+                            }
                         }
                         .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-                        .minimumScaleFactor(0.85)
                     }
                 } else {
                     EmptyCardState(icon: "moon.zzz", title: "No Sleep Yet",
@@ -76,7 +81,7 @@ struct ActivityCard: View {
                     EmptyCardState(icon: "figure.walk", title: "No Movement Yet",
                                    text: "Steps and active energy appear after the first sync of the day.")
                 } else {
-                    HStack(alignment: .top, spacing: 24) {
+                    FitStack(spacing: 24) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Steps").font(.subheadline).foregroundStyle(.secondary)
                             BigValue(Fmt.steps(st?.steps), "")
@@ -169,21 +174,21 @@ struct AllDaysView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
                     if let sc = s.scores?.days[day] {
-                        // one pill per score, never wrapped: the row is its own line
-                        HStack(spacing: 6) {
-                            ForEach(ScoreKind.allCases) { kind in
-                                if let v = sc.score(kind)?.score {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: kind.icon).font(.caption2)
-                                        Text("\(Int(v.rounded()))").font(.caption.weight(.semibold)).monospacedDigit()
-                                    }
-                                    .foregroundStyle(kind.tint)
-                                    .padding(.horizontal, 8).padding(.vertical, 3)
-                                    .background(kind.tint.opacity(0.12), in: Capsule())
-                                    .fixedSize()
-                                    .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
-                                }
+                        // one pill per score on its own line; a column at large text
+                        let pill = { (kind: ScoreKind, v: Double) in
+                            HStack(spacing: 4) {
+                                Image(systemName: kind.icon).font(.caption2)
+                                Text("\(Int(v.rounded()))").font(.caption.weight(.semibold)).monospacedDigit()
                             }
+                            .foregroundStyle(kind.tint)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(kind.tint.opacity(0.12), in: Capsule())
+                            .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
+                        }
+                        let present = ScoreKind.allCases.compactMap { k in sc.score(k).map { (k, $0.score) } }
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 6) { ForEach(present, id: \.0) { pill($0.0, $0.1).fixedSize() } }
+                            VStack(alignment: .leading, spacing: 4) { ForEach(present, id: \.0) { pill($0.0, $0.1) } }
                         }
                     }
                     HStack(spacing: 14) {
@@ -220,11 +225,6 @@ struct SyncView: View {
     let onPair: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject private var diag = RingDiag.shared
-    @ObservedObject private var store = DiagStore.shared
-    @State private var copied = false
-    @State private var confirmReset = false
-    @State private var linkPolicy = SyncSettings.linkPolicy
     private static let when: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "MMM d, HH:mm"; return f
     }()
@@ -286,6 +286,68 @@ struct SyncView: View {
                     .foregroundStyle(Theme.caution)
                 }
 
+                // always reachable: the logs matter most when pairing or a sync fails
+                Section {
+                    NavigationLink {
+                        SyncAdvancedView(ring: ring, onReset: onReset)
+                    } label: {
+                        Label("Advanced", systemImage: "gearshape.2")
+                    }
+                } footer: {
+                    Text(ring.isPaired ? "Sync history, connection behaviour, logs, and reset." : "Logs and reset.")
+                }
+            }
+            .navigationTitle("Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .sensoryFeedback(.success, trigger: ring.lastReport?.nextCursor)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, ring.busy {
+                IdleTimerLock.refreshIfHeld("ring-sync")
+            }
+        }
+    }
+
+    @ViewBuilder private var statusIcon: some View {
+        ZStack {
+            Circle().fill((ring.busy ? Color.accentColor : (ring.wasRecentlySynced ? Theme.good : Color.secondary)).opacity(0.15))
+            if ring.busy {
+                ProgressView()
+            } else {
+                Image(systemName: ring.wasRecentlySynced ? "checkmark" : "arrow.triangle.2.circlepath")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(ring.wasRecentlySynced ? Theme.good : .secondary)
+            }
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Everything about syncing that only matters when something goes wrong: the
+/// connection policy, the sync history, the logs, and the reset. Kept one tap away
+/// so the Sync sheet itself shows only the status and the button.
+struct SyncAdvancedView: View {
+    @ObservedObject var ring: RingSync
+    let onReset: () -> Void
+    @ObservedObject private var diag = RingDiag.shared
+    @ObservedObject private var store = DiagStore.shared
+    @State private var copied = false
+    @State private var confirmReset = false
+    @State private var linkPolicy = SyncSettings.linkPolicy
+    private static let when: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d, HH:mm"; return f
+    }()
+
+    var body: some View {
+        Form {
                 if ring.isPaired {
                     Section {
                         Picker("After a sync", selection: $linkPolicy) {
@@ -365,37 +427,9 @@ struct SyncView: View {
                             Text("The synced database on this iPhone is deleted. The next sync reads the whole ring history again.")
                         }
                 }
-            }
-            .navigationTitle("Sync")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
-        .presentationDragIndicator(.visible)
-        .sensoryFeedback(.success, trigger: ring.lastReport?.nextCursor)
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active, ring.busy {
-                IdleTimerLock.refreshIfHeld("ring-sync")
-            }
-        }
-    }
-
-    @ViewBuilder private var statusIcon: some View {
-        ZStack {
-            Circle().fill((ring.busy ? Color.accentColor : (ring.wasRecentlySynced ? Theme.good : Color.secondary)).opacity(0.15))
-            if ring.busy {
-                ProgressView()
-            } else {
-                Image(systemName: ring.wasRecentlySynced ? "checkmark" : "arrow.triangle.2.circlepath")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(ring.wasRecentlySynced ? Theme.good : .secondary)
-            }
-        }
-        .frame(width: 44, height: 44)
-        .accessibilityHidden(true)
+        .navigationTitle("Advanced")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -530,6 +564,7 @@ struct RootView: View {
     @ObservedObject private var ring = RingSync.shared
     @StateObject private var modelProgress = ModelProgress()
     @Namespace private var zoom
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private func f(_ v: Double?, _ fallback: String = "—") -> String {
         v.map { "\(Int($0))" } ?? fallback
@@ -552,10 +587,11 @@ struct RootView: View {
                 if let s {
                     content(s)
                 } else {
-                    ProgressView("Reading your ring…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    SummarySkeleton()
+                        .transition(.opacity)
                 }
             }
+            .animation(Motion.settle, value: s == nil)
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Summary")
             .toolbar {
@@ -727,12 +763,14 @@ struct RootView: View {
             let recentTemperatures = Array(s.nights.compactMap(\.skin_temp).prefix(14).reversed())
             let recentOxygen = Array(s.nights.compactMap(\.spo2_mean).prefix(14).reversed())
             let latestHR = s.vitals.hr
-            let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+            let columns = typeSize.isAccessibilitySize
+                ? [GridItem(.flexible())]
+                : [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     // highlights: the digest line, and the sync / analysis status while
                     // the ring or the models are working (HIG: describe the work, not the wait)
-                    HighlightsCard(digest: s.digest,
+                    HighlightsCard(digest: s.days.first.flatMap { s.highlight(for: $0) } ?? s.digest,
                                    status: ring.busy ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
                                        : (isRefreshingSummary ? (modelProgress.label.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Updating your summary…") : nil))
                         .entrance(0)
@@ -792,12 +830,11 @@ struct RootView: View {
                                         .foregroundStyle(Theme.tone(delta: (va - ca) * 100, goodWhenPositive: false, threshold: 50))
                                 }
                                 Divider()
-                                if let pwv = cv.pwv_ms { StatRow(label: "Pulse-wave velocity", value: String(format: "%.2f m/s", pwv)) }
-                                if let seg = cv.segments { StatRow(label: "Segments analysed", value: "\(seg)") }
+                                if let pwv = cv.pwv_ms { StatRow(label: "Pulse speed in arteries", value: String(format: "%.1f m/s", pwv)) }
                             }
                             if let vo = s.fitness?.vo2max {
                                 if s.cardio?.vascular_age != nil { Divider() }
-                                StatRow(label: "VO₂max estimate", value: String(format: "%.1f ml/kg/min", vo))
+                                StatRow(label: "Cardio fitness (VO₂ max)", value: String(format: "%.0f", vo))
                             }
                         }
                         .card()

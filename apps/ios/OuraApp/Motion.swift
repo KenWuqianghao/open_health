@@ -146,7 +146,35 @@ private struct ZoomSource<ID: Hashable>: ViewModifier {
     }
 }
 
+// ── shimmer ──────────────────────────────────────────────────────────────────
+/// A soft band of light that sweeps across placeholders while content loads.
+private struct Shimmer: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var phase: CGFloat = -1
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if !reduceMotion {
+                    GeometryReader { geo in
+                        LinearGradient(colors: [.clear, Color.primary.opacity(0.07), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: geo.size.width * 0.6)
+                            .offset(x: phase * geo.size.width * 1.6)
+                    }
+                    .mask(content)
+                    .allowsHitTesting(false)
+                }
+            }
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { phase = 1 }
+            }
+    }
+}
+
 extension View {
+    /// Sweep a soft shimmer across this view (skipped under Reduce Motion).
+    func shimmer() -> some View { modifier(Shimmer()) }
     /// Fade and lift into place on first appearance, `index` steps into a stagger.
     func entrance(_ index: Int = 0) -> some View { modifier(Entrance(index: index)) }
     /// Scale and fade in when scrolling up from the bottom edge.

@@ -539,7 +539,7 @@ struct IllnessCard: View {
                         }
                     }
                 }
-                Text("On-device illness model · \(Fmt.monthDay(illness.date))")
+                Text("Checked \(Fmt.monthDay(illness.date)) against your own recent nights")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
@@ -778,7 +778,10 @@ struct DayReportView: View {
 struct SleepReport: View {
     let s: Summary
     let day: String
-    private let grid = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var grid: [GridItem] {
+        Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 1 : 3)
+    }
 
     var body: some View {
         if let n = s.night(forDay: day) {
@@ -789,7 +792,7 @@ struct SleepReport: View {
             VStack(alignment: .leading, spacing: 12) {
                 CardHeader(title: "Sleep", icon: "bed.double.fill", tint: Theme.sleep,
                            detail: "\(n.start ?? "—") – \(n.end ?? "—")")
-                HStack(alignment: .top, spacing: 16) {
+                FitStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("In Bed").font(.caption).foregroundStyle(.secondary)
                         BigValue(parts: n.in_bed_h.map(Fmt.hoursMinutes) ?? [("—", "")], style: .title2)
@@ -834,7 +837,7 @@ struct SleepReport: View {
 
                 if let m = metrics {
                     VStack(alignment: .leading, spacing: 12) {
-                        CardHeader(title: "Sleep Architecture", icon: "chart.bar.xaxis", tint: Theme.sleep)
+                        CardHeader(title: "Sleep Details", icon: "chart.bar.xaxis", tint: Theme.sleep)
                         clinicalGrid(m)
                     }
                     .card()
@@ -844,7 +847,7 @@ struct SleepReport: View {
                                            stages: Sleep.smooth(n.stages ?? [], 5))
                 if auto.any {
                     VStack(alignment: .leading, spacing: 12) {
-                        CardHeader(title: "Recovery by Stage", icon: "heart.fill", tint: Theme.heart)
+                        CardHeader(title: "Heart by Sleep Stage", icon: "heart.fill", tint: Theme.heart)
                         autonomicGrid(auto)
                     }
                     .card()
@@ -866,7 +869,7 @@ struct SleepReport: View {
                     }
                     .card()
                 }
-                Text("On-device sleep staging runs in the torch build — the hypnogram, sleep cycles, and stage metrics appear there. The signals above are model-free.")
+                Text("Your ring has not sent sleep stages for this night yet. They usually arrive with the next sync. The signals above come straight from the ring.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
             }
@@ -885,12 +888,12 @@ struct SleepReport: View {
     @ViewBuilder private func clinicalGrid(_ m: SleepMetrics) -> some View {
         let mins = { (x: Double?) in x.map { "\(Int($0.rounded())) min" } ?? "—" }
         let cells: [(String, String)] = [
-            ("Sleep onset", mins(m.solMin)),
-            ("REM latency", mins(m.remLatencyMin)),
-            ("Awake after onset", mins(m.wasoMin)),
+            ("To fall asleep", mins(m.solMin)),
+            ("Until first REM", mins(m.remLatencyMin)),
+            ("Awake in the night", mins(m.wasoMin)),
             ("Awakenings", "\(m.awakenings)"),
             ("Sleep cycles", "\(m.cycles)"),
-            ("Fragmentation", String(format: "%.0f /h", m.fragIndex)),
+            ("Stage changes", String(format: "%.0f per hr", m.fragIndex)),
         ]
         LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
             ForEach(cells, id: \.0) { Readout(value: $0.1, caption: $0.0) }
@@ -901,8 +904,8 @@ struct SleepReport: View {
         let hrv = { (x: Double?) in x.map { "\(Int($0)) ms" } ?? "—" }
         let hr = { (x: Double?) in x.map { "\(Int($0)) bpm" } ?? "—" }
         let cells: [(String, String, Color)] = [
-            ("HRV · deep", hrv(a.hrvDeep), Theme.deep), ("HRV · core", hrv(a.hrvLight), Theme.light), ("HRV · REM", hrv(a.hrvRem), Theme.rem),
-            ("HR · deep", hr(a.hrDeep), Theme.deep), ("HR · core", hr(a.hrLight), Theme.light), ("HR · REM", hr(a.hrRem), Theme.rem),
+            ("HRV in Deep", hrv(a.hrvDeep), Theme.deep), ("HRV in Core", hrv(a.hrvLight), Theme.light), ("HRV in REM", hrv(a.hrvRem), Theme.rem),
+            ("Heart in Deep", hr(a.hrDeep), Theme.deep), ("Heart in Core", hr(a.hrLight), Theme.light), ("Heart in REM", hr(a.hrRem), Theme.rem),
         ]
         LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
             ForEach(cells, id: \.0) { Readout(value: $0.1, caption: $0.0, color: $0.2) }
@@ -929,15 +932,16 @@ struct SleepReport: View {
         var out: [String] = []
         if let e = n.efficiency {
             out.append(e >= 85 ? "Sleep efficiency of \(Int(e))% is solid — little time awake once down."
-                : e >= 75 ? "Efficiency \(Int(e))% is fair; some fragmentation kept you from deeper rest."
+                : e >= 75 ? "Efficiency \(Int(e))% is fair; some restless stretches kept you from deeper rest."
                 : "Efficiency \(Int(e))% is low — much of the night in bed wasn't spent asleep.")
         }
         if let dp = n.deep_pct {
-            out.append(dp < 10 ? "Deep sleep was scarce (\(Int(dp))%), the physically-restorative stage — often suppressed by late meals, alcohol, or stress."
-                : "Deep sleep \(Int(dp))% (target ~13–23%), the physically-restorative stage.")
+            out.append(dp < 10 ? "Deep sleep, the stage where your body repairs itself, was short at \(Int(dp))%. Late meals, alcohol, and stress often cut it."
+                : dp > 23 ? "You had plenty of deep sleep (\(Int(dp))%), the stage where your body repairs itself."
+                : "Deep sleep was \(Int(dp))%, inside the healthy 13–23% range. This is the stage where your body repairs itself.")
         }
         if let rp = n.rem_pct, let rl = m?.remLatencyMin {
-            out.append("REM was \(Int(rp))% with first REM \(Int(rl.rounded())) min after onset.")
+            out.append("REM, the dreaming stage that helps memory, was \(Int(rp))% of the night. It first started \(Int(rl.rounded())) min after you fell asleep.")
         }
         if let m {
             out.append("You spent \(Int(m.wasoMin.rounded())) min awake across \(m.awakenings) awakening\(m.awakenings == 1 ? "" : "s") after first falling asleep.")
@@ -949,7 +953,10 @@ struct SleepReport: View {
 struct ActivityReport: View {
     let s: Summary
     let day: String
-    private let grid = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var grid: [GridItem] {
+        Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 1 : 3)
+    }
 
     var body: some View {
         let st = s.activity_daily[day]
@@ -957,7 +964,7 @@ struct ActivityReport: View {
 
         VStack(alignment: .leading, spacing: 12) {
             CardHeader(title: "Activity", icon: "flame.fill", tint: Theme.activity)
-            HStack(alignment: .top, spacing: 16) {
+            FitStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Steps").font(.caption).foregroundStyle(.secondary)
                     BigValue(Fmt.steps(st?.steps), "", style: .title2)
@@ -989,7 +996,7 @@ struct ActivityReport: View {
             LazyVGrid(columns: grid, alignment: .leading, spacing: 16) {
                 Readout(value: "\(Int(activeMin)) min", caption: "Active")
                 Readout(value: "\(Int(lightMin)) min", caption: "Lightly active")
-                Readout(value: String(format: "%.1f MET", peak), caption: "Peak intensity")
+                Readout(value: peak >= 5 ? "Vigorous" : (peak >= 2 ? "Moderate" : "Light"), caption: "Hardest effort")
             }
         }
         .card()

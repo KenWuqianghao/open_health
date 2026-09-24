@@ -664,6 +664,9 @@ struct ScoreRing: View {
             }
             .font(Theme.number(size >= 120 ? .largeTitle : .title2))
             .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .padding(lineWidth * 1.4)
             .foregroundStyle(score == nil ? Color.secondary : Color.primary)
         }
         .frame(width: size, height: size)
@@ -686,40 +689,50 @@ struct ScoreRing: View {
 struct ScoresCard: View {
     let s: Summary
     let day: String
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .title2) private var ringSize: CGFloat = 84
     var body: some View {
         let found = ScoreKind.allCases.map { ($0, s.latestScore($0, upTo: day)) }
+        // Three rings side by side; at accessibility text sizes, one row per score
+        // with the ring on the leading side, so nothing truncates.
+        let big = typeSize.isAccessibilitySize
+        let rows = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14)) : AnyLayout(HStackLayout(spacing: 0))
+        let item = big ? AnyLayout(HStackLayout(spacing: 16)) : AnyLayout(VStackLayout(spacing: 8))
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 0) {
+            rows {
                 ForEach(found, id: \.0) { kind, hit in
                     NavigationLink(value: Route.score(kind, hit?.day ?? day)) {
-                        VStack(spacing: 8) {
-                            ScoreRing(score: hit?.score.score, tint: kind.tint,
+                        item {
+                            ScoreRing(score: hit?.score.score, tint: kind.tint, size: min(ringSize, 120),
                                       delay: 0.2 + Double(ScoreKind.allCases.firstIndex(of: kind) ?? 0) * 0.12)
                                 // the transition source clips to its bounds; pad it so
                                 // the ring's glow is inside, then give the space back
                                 .padding(14)
                                 .zoomSource(Route.score(kind, hit?.day ?? day))
                                 .padding(-14)
-                            HStack(spacing: 4) {
-                                Text(kind.title).font(.subheadline.weight(.semibold))
-                                if hit?.score.provisional == true {
-                                    Image(systemName: "circle.dotted")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityLabel("provisional")
+                            VStack(alignment: big ? .leading : .center, spacing: 4) {
+                                HStack(spacing: 4) {
+                                    Text(kind.title).font(.subheadline.weight(.semibold))
+                                        .lineLimit(1).minimumScaleFactor(0.7)
+                                    if hit?.score.provisional == true {
+                                        Image(systemName: "circle.dotted")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .accessibilityLabel("provisional")
+                                    }
+                                }
+                                if let hit {
+                                    let band = Theme.scoreBand(hit.score.score)
+                                    Text(hit.day == day ? band.label : Fmt.dayLabel(hit.day))
+                                        .font(.caption)
+                                        .foregroundStyle(hit.day == day ? band.color : .secondary)
+                                } else {
+                                    Text(kind == .activity ? "Tracking today" : "After a night")
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            if let hit {
-                                let band = Theme.scoreBand(hit.score.score)
-                                Text(hit.day == day ? band.label : Fmt.dayLabel(hit.day))
-                                    .font(.caption)
-                                    .foregroundStyle(hit.day == day ? band.color : .secondary)
-                            } else {
-                                Text(kind == .activity ? "Tracking today" : "After a night")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
                         }
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: big ? .leading : .center)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.pressable)
@@ -863,5 +876,75 @@ private struct ContributorRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(c.name) \(Int(c.score.rounded())) out of 100\(valueText.map { ", \($0)" } ?? ""), \(Int((c.weight * 100).rounded())) percent of the score")
+    }
+}
+
+
+// ── adaptive layout ──────────────────────────────────────────────────────────
+/// Side by side when it fits the width, stacked when the text is too large.
+struct FitStack<Content: View>: View {
+    var alignment: VerticalAlignment = .top
+    var spacing: CGFloat = 16
+    @ViewBuilder var content: Content
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: alignment, spacing: spacing) { content }
+            VStack(alignment: .leading, spacing: spacing * 0.6) { content }
+        }
+    }
+}
+
+// ── loading placeholders ─────────────────────────────────────────────────────
+/// The Summary's shape in grey while the first summary loads, with a slow shimmer,
+/// so the first launch reads as "arriving" instead of "stuck".
+struct SummarySkeleton: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                card(lines: [0.35, 0.8])
+                bar(width: 110, height: 22).padding(.top, 8)
+                HStack(spacing: 0) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        VStack(spacing: 10) {
+                            Circle().stroke(Color(.tertiarySystemFill), lineWidth: 9).frame(width: 84, height: 84)
+                            bar(width: 64, height: 10)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .card()
+                card(lines: [0.25, 0.5, 1.0])
+                card(lines: [0.3, 0.6, 1.0])
+                HStack(spacing: 12) {
+                    card(lines: [0.5, 0.4])
+                    card(lines: [0.5, 0.4])
+                }
+            }
+            .padding(.horizontal, Theme.gutter)
+            .shimmer()
+        }
+        .scrollDisabled(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Reading your ring")
+    }
+
+    private func bar(width: CGFloat? = nil, height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: height / 2, style: .continuous)
+            .fill(Color(.tertiarySystemFill))
+            .frame(width: width, height: height)
+    }
+
+    private func card(lines: [CGFloat]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(lines.indices, id: \.self) { i in
+                GeometryReader { geo in
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(width: geo.size.width * lines[i])
+                }
+                .frame(height: i == 0 ? 14 : 22)
+            }
+        }
+        .card()
     }
 }

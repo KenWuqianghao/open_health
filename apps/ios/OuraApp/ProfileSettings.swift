@@ -220,14 +220,17 @@ struct ProfileSettingsView: View {
                         LabeledContent("Firmware", value: paired.firmware ?? "—")
                         LabeledContent("Last sync", value: ring.lastSuccessfulSyncAt.map { Self.when.string(from: $0) } ?? "—")
                         Button { showPairing = true } label: { Label("Pair a Different Ring", systemImage: "plus.circle") }
-                        Button {
-                            revealKey.toggle()
+                        // the pairing key is for using the same ring from the desktop
+                        // client; fold it away so it never sits open on the screen
+                        DisclosureGroup(isExpanded: $revealKey.animation(Motion.snappy)) {
+                            if let key = Keychain.loadKey() {
+                                Text(key).font(Theme.mono(.footnote)).textSelection(.enabled)
+                                Button { UIPasteboard.general.string = key } label: { Label("Copy Key", systemImage: "doc.on.doc") }
+                                Text("Made on this iPhone when you paired. Use it with the desktop client (oura --key-file). Losing it means a factory reset of the ring.")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
                         } label: {
-                            Label(revealKey ? "Hide auth key" : "Show auth key", systemImage: "key")
-                        }
-                        if revealKey, let key = Keychain.loadKey() {
-                            Text(key).font(Theme.mono(.footnote)).textSelection(.enabled)
-                            Button { UIPasteboard.general.string = key } label: { Label("Copy Key", systemImage: "doc.on.doc") }
+                            Label("Pairing Key", systemImage: "key")
                         }
                         Button("Forget Ring", role: .destructive) { confirmForget = true }
                             .confirmationDialog("Forget this ring?", isPresented: $confirmForget) {
@@ -240,8 +243,6 @@ struct ProfileSettingsView: View {
                     }
                 } header: {
                     Text("Ring")
-                } footer: {
-                    Text("The auth key was made on this iPhone at pairing time. Copy it to use the same ring with the desktop client (oura --key-file). Losing it means a factory reset.")
                 }
 
                 Section {

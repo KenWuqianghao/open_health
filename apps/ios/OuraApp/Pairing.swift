@@ -9,6 +9,7 @@ struct PairingView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var pairing = RingPairing()
     @ObservedObject private var ring = RingSync.shared
+    @ScaledMetric(relativeTo: .subheadline) private var stepSize: CGFloat = 26
 
     var body: some View {
         NavigationStack {
@@ -259,7 +260,7 @@ struct PairingView: View {
         HStack(alignment: .top, spacing: 12) {
             Text("\(n)").font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
+                .frame(width: stepSize, height: stepSize)
                 .background(Theme.sleep, in: Circle())
                 .accessibilityHidden(true)
             Text(t).font(.subheadline).foregroundStyle(.secondary)

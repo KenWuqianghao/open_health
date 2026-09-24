@@ -323,10 +323,10 @@ enum VitalKind: String, Identifiable, CaseIterable {
     }
     var caption: String {
         switch self {
-        case .hrv: return "RMSSD from the longest sleep of each morning"
-        case .heartRate: return "Nightly minimum resting heart rate"
-        case .temp: return "Nightly skin temperature"
-        case .oxygen: return "Nightly average blood oxygen"
+        case .hrv: return "Heart rate variability during your main sleep: how much the time between heartbeats varies. Higher than your usual generally means your body has recovered well."
+        case .heartRate: return "Your lowest heart rate while asleep. A resting heart rate below your usual is a good sign; one above it can mean stress, alcohol, a late meal, or an illness coming on."
+        case .temp: return "Your skin temperature while asleep. Small changes are normal; a jump of half a degree or more can come with illness or your cycle."
+        case .oxygen: return "Your average blood oxygen while asleep. Most healthy readings sit between 95 and 100 percent."
         }
     }
     var decimals: Int {
@@ -368,6 +368,32 @@ enum Route: Hashable {
 }
 
 extension Summary {
+    /// One friendly sentence about the day, built from the scores and vitals: how
+    /// recovered you are, how long you were in bed, and where HRV sits against your
+    /// usual. `nil` when there is nothing to say yet.
+    func highlight(for day: String) -> String? {
+        var sentences: [String] = []
+        var first: String?
+        if let r = latestScore(.readiness, upTo: day)?.score.score {
+            switch r {
+            case 85...: first = "You're well recovered"
+            case 70..<85: first = "You're reasonably recovered"
+            default: first = "Recovery is low, so take it easy"
+            }
+        }
+        if let n = self.night(forDay: day), let h = n.in_bed_h, h > 0 {
+            let bed = Fmt.hoursMinutes(h).map { "\($0.0) \($0.1)" }.joined(separator: " ")
+            first = first.map { "\($0) after \(bed) in bed" } ?? "You spent \(bed) in bed"
+        }
+        if let first { sentences.append(first + ".") }
+        if vitals.hrv.baseline != nil, let d = vitals.hrv.delta_pct {
+            sentences.append(abs(d) < 8 ? "Your HRV is in its usual range."
+                             : d > 0 ? "Your HRV is above your usual, a good sign."
+                             : "Your HRV is below your usual.")
+        }
+        return sentences.isEmpty ? nil : sentences.joined(separator: " ")
+    }
+
     /// The score of `kind` for `day`, or the newest earlier day that has one — so a
     /// morning without a night still shows the last readiness, labelled with its date.
     func latestScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {

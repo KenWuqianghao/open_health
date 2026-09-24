@@ -576,7 +576,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1272,7 +1272,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oura-analysis"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=7a47ef42144821ca43a31b2e5bfca6a91160999b#7a47ef42144821ca43a31b2e5bfca6a91160999b"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=0389fedf595f7b635cce2e132f24b328c5949fac#0389fedf595f7b635cce2e132f24b328c5949fac"
 dependencies = [
  "oura-protocol",
  "serde",
@@ -1337,7 +1337,7 @@ dependencies = [
 [[package]]
 name = "oura-link"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=7a47ef42144821ca43a31b2e5bfca6a91160999b#7a47ef42144821ca43a31b2e5bfca6a91160999b"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=0389fedf595f7b635cce2e132f24b328c5949fac#0389fedf595f7b635cce2e132f24b328c5949fac"
 dependencies = [
  "async-trait",
  "btleplug",
@@ -1353,7 +1353,7 @@ dependencies = [
 [[package]]
 name = "oura-protocol"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=7a47ef42144821ca43a31b2e5bfca6a91160999b#7a47ef42144821ca43a31b2e5bfca6a91160999b"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=0389fedf595f7b635cce2e132f24b328c5949fac#0389fedf595f7b635cce2e132f24b328c5949fac"
 dependencies = [
  "aes",
  "hex",
@@ -1365,7 +1365,7 @@ dependencies = [
 [[package]]
 name = "oura-store"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=7a47ef42144821ca43a31b2e5bfca6a91160999b#7a47ef42144821ca43a31b2e5bfca6a91160999b"
+source = "git+https://github.com/KenWuqianghao/open_oura?rev=0389fedf595f7b635cce2e132f24b328c5949fac#0389fedf595f7b635cce2e132f24b328c5949fac"
 dependencies = [
  "hex",
  "oura-protocol",
@@ -2463,7 +2463,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

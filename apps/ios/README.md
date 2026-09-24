@@ -3,7 +3,7 @@
 The iOS app talks to an Oura ring over Bluetooth without an Oura account. It pairs
 the ring on the phone, pulls the ring's history into a local SQLite database,
 computes the metrics on the phone, and writes the measured data to Apple Health.
-Nothing leaves the phone.
+Nothing leaves the phone unless you connect your own hub.
 
 This page is the full path from a clean Mac to a synced ring. Follow it in order.
 
@@ -267,6 +267,8 @@ the simulator app container at `Library/Application Support/oura.db`
 | `RingPairing.swift`, `Pairing.swift` | On-device pairing: probe, key install, retry, first sync. |
 | `BackgroundSync.swift` | `BGTaskScheduler` registration and handlers. |
 | `HealthPlanner.swift`, `HealthExporter.swift`, `HealthStoreClient.swift` | Apple Health export: plan, idempotent delete-then-write, state. |
+| `HubPush.swift` | The hub: settings, the `openoura://hub` connect link and its prompt, the summary and ring-row pushes. |
+| `HealthReader.swift`, `HealthBackground.swift` | Apple Health reads for the hub: anchored queries and background delivery. |
 | `Theme.swift`, `Components.swift` | The design tokens and shared views. |
 | `../../crates/oura-core` | The Rust FFI: pair, sync, cancel, health samples. |
 | `../../crates/oura-summary` | The shared summary and the Apple Health sample brain. |

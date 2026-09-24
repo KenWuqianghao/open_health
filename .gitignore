@@ -31,3 +31,6 @@ apps/ios/DerivedData/
 apps/ios/.install.env
 local/
 .hub-token
+
+# Python bytecode
+__pycache__/

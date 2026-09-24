@@ -2,9 +2,10 @@ import CryptoKit
 import Foundation
 import UIKit
 
-// The health hub: an always-on server (crates/oura-hub) that keeps the summary for
-// agents and a replica of the raw ring rows as a backup. This file holds the
-// settings, the two payloads, and the pusher. See docs/health-hub.md.
+// The health hub: an always-on server (github.com/KenWuqianghao/oura-hub) that keeps
+// the summary for agents and a replica of the raw ring rows as a backup. This file
+// holds the settings, the connect link, the two payloads, and the pusher. See
+// docs/health-hub.md in that repository.
 
 /// Settings. The URL and the switch live in UserDefaults; the token lives in the
 /// Keychain, readable after the first unlock so a background sync on a locked phone

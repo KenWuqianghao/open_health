@@ -20,6 +20,7 @@ struct Epoch {
 
 const RESET_SLACK_DS: i64 = 6 * 3600 * 10;
 const RING_START_TAG: u8 = 0x41;
+const ANCHOR_WINDOW_DS: i64 = 24 * 3600 * 10;
 // A history event cannot legitimately occur well after the phone captured it.
 // A few hours tolerate clock corrections/timezone setup without allowing a replayed
 // pre-reboot high ds value to fabricate weeks of future data.
@@ -91,11 +92,23 @@ impl RingClock {
 
     pub(crate) fn unix_s(&self, ds: i64, captured_unix: i64) -> f64 {
         let epoch = self.epoch_for(ds, captured_unix);
-        if let Some((anchor_ds, anchor_unix)) = epoch
+        // The ring stamps an event with its clock, or with the previous stamp + 1
+        // when events come faster than the clock ticks. A stamp is never behind the
+        // clock, so the anchor with the largest `unix - ds` has the least lead.
+        // Only anchors within a day compete, which keeps clock drift out of it;
+        // with none that close, the nearest anchor is used.
+        let nearby = epoch
             .anchors
             .iter()
-            .min_by_key(|(a, _)| (*a as i128 - ds as i128).unsigned_abs())
-        {
+            .filter(|(a, _)| (*a - ds).abs() <= ANCHOR_WINDOW_DS)
+            .max_by_key(|(a, unix)| unix * 10 - a);
+        let nearest = || {
+            epoch
+                .anchors
+                .iter()
+                .min_by_key(|(a, _)| (*a as i128 - ds as i128).unsigned_abs())
+        };
+        if let Some((anchor_ds, anchor_unix)) = nearby.or_else(nearest) {
             let predicted = *anchor_unix as f64 + (ds - *anchor_ds) as f64 / 10.0;
             if predicted <= captured_unix as f64 + FUTURE_SLACK_S {
                 return predicted;
@@ -213,6 +226,19 @@ mod tests {
         assert_eq!(clock.unix_s(128_000, 1_102_600), 1_100_800.0);
         // Before the restart: still the time_sync anchor.
         assert_eq!(clock.unix_s(105_000, 1_102_600), 1_009_500.0);
+    }
+
+    #[test]
+    fn anchor_with_the_least_lead_wins() {
+        // A burst of events pushed the stamps 1_000 s ahead of the clock; the
+        // first time_sync after it carries that lead, a later one does not.
+        let clock = RingClock::from_events(&[
+            event(100_000, 1, "{}", 1_000_000),
+            event(130_000, 0x42, r#"{"unix_time":1002000}"#, 1_002_100),
+            event(150_000, 0x42, r#"{"unix_time":1005000}"#, 1_005_100),
+        ]);
+        // Offsets: 10_020_000 - 130_000 = 9_890_000 and 10_050_000 - 150_000 = 9_900_000.
+        assert_eq!(clock.unix_s(100_000, 1_000_000), 1_000_000.0);
     }
 
     #[test]

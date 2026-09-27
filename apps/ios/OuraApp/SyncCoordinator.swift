@@ -394,7 +394,7 @@ actor SyncCoordinator {
                 metrics.exit = .completed
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSuccessKey)
                 UserDefaults.standard.removeObject(forKey: Self.syncIncompleteKey)
-                dlog("sync", "OK — serial=\(report.serial) inserted=\(report.inserted) events=\(report.eventsSynced) cursor=\(report.nextCursor)")
+                dlog("sync", "OK — serial=\(report.serial) inserted=\(report.inserted) events=\(report.eventsSynced) cursor=\(report.nextCursor) clock=\(report.clockWritten ? "written" : "not written")")
                 await RingSync.shared.set(status: "synced — \(report.inserted) new events from \(report.serial)")
                 outcome = .synced(report)
                 break

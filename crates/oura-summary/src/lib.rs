@@ -495,11 +495,15 @@ fn normalize_bed_periods(
                 - unix_s_at(previous.end_ds, previous.captured_unix);
             let same_epoch =
                 (wall_gap_s - raw_gap_ds as f64 / 10.0).abs() <= EPOCH_ALIGNMENT_SLACK_S;
+            // The ring can report one night twice with start times seconds apart;
+            // a window inside the previous one is the same night at any length.
+            let contained = raw_gap_ds <= 0 && period.end_ds <= previous.end_ds;
             if same_epoch
-                && raw_gap_ds <= MAX_BED_BREAK_DS
-                && wall_gap_s <= MAX_BED_BREAK_DS as f64 / 10.0
-                && raw_gap_ds >= -MAX_SLEEP_SIGNAL_EXTENSION_DS
-                && wall_gap_s >= -(MAX_SLEEP_SIGNAL_EXTENSION_DS as f64 / 10.0)
+                && (contained
+                    || (raw_gap_ds <= MAX_BED_BREAK_DS
+                        && wall_gap_s <= MAX_BED_BREAK_DS as f64 / 10.0
+                        && raw_gap_ds >= -MAX_SLEEP_SIGNAL_EXTENSION_DS
+                        && wall_gap_s >= -(MAX_SLEEP_SIGNAL_EXTENSION_DS as f64 / 10.0)))
             {
                 previous.end_ds = previous.end_ds.max(period.end_ds);
                 previous.raw_start_ds = previous.raw_start_ds.min(period.raw_start_ds);
@@ -2011,6 +2015,16 @@ mod tests {
             ds as f64 / 10.0
         });
         assert_eq!(got[0].end_ds, 0);
+    }
+
+    #[test]
+    fn same_night_reported_twice_is_one_window() {
+        let hour = 3600 * 10;
+        // Second report starts 30 s later and ends 1.5 h earlier (7 h overlap).
+        let periods = vec![bed(0, 8 * hour), bed(300, 13 * hour / 2)];
+        let got = normalize_bed_periods(periods, &[], &[], |ds, _| ds as f64 / 10.0);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].start_ds, got[0].end_ds), (0, 8 * hour));
     }
 
     #[test]

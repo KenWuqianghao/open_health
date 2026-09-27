@@ -166,6 +166,10 @@ pub struct SyncReport {
     pub events_synced: u32,
     pub inserted: u32,
     pub next_cursor: u32,
+    /// At least one of the two clock writes at the end of the sync went out without
+    /// a link error. The ring does not answer them; the proof is its `time_sync`
+    /// event in the next drain.
+    pub clock_written: bool,
 }
 
 /// Options for [`RingSession::sync_with`].
@@ -487,11 +491,23 @@ impl RingSession {
                 .map_err(&fail)?;
             }
         }
+
+        // Write the phone's clock to the ring on every sync. The ring logs each
+        // write as a `time_sync` event, and that event is the only link from its
+        // tick counter to UTC. Without a fresh one, a flat battery (the counter
+        // stops while the ring is off) moves every later night hours earlier.
+        // This runs after the drain is saved because a Gen3 ring can drop the
+        // link soon after a write. Best effort, like pairing: both message forms.
+        // Each write waits out the 1.5 s quiet window, so this adds about 3 s.
+        let clock_written =
+            client.sync_time().await.is_ok() | client.sync_time_app().await.is_ok();
+
         Ok(SyncReport {
             serial,
             events_synced: outcome.events_synced,
             inserted: inserted.into_inner(),
             next_cursor: outcome.next_cursor,
+            clock_written,
         })
     }
 }

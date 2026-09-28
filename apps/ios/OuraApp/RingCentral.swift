@@ -71,6 +71,18 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var powerWaiters: [CheckedContinuation<Void, Error>] = []
     private var holdOffUntil = Date.distantPast
     private var holdOffTimer: DispatchWorkItem?
+    /// When a pending connect was registered with a system start delay: the earliest
+    /// time it may fire. An earlier connect means iOS ignored the delay.
+    private var armDelayUntil: Date?
+    private var armScanTimer: DispatchWorkItem?
+
+    /// Set once iOS connected before a requested start delay ended. The hold-off
+    /// then falls back to the in-app timer, which does not run while suspended.
+    private static let startDelayIgnoredKey = "ring.start-delay-ignored"
+    static var startDelayIgnored: Bool {
+        get { UserDefaults.standard.bool(forKey: startDelayIgnoredKey) }
+        set { UserDefaults.standard.set(newValue, forKey: startDelayIgnoredKey) }
+    }
     private var parkedWakeTimer: DispatchWorkItem?
     private var armScanning = false
 
@@ -338,7 +350,21 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         let p = pairedPeripheral()
         lock.lock()
         guard case .free = ownership else { lock.unlock(); return }
-        if Date() < holdOffUntil {
+        let wait = holdOffUntil.timeIntervalSinceNow
+        if wait > 0, let p, p.state != .connected, !Self.startDelayIgnored {
+            // Register the pending connect now and let iOS wait out the hold-off: an
+            // app timer does not run while iOS suspends the app, so a timer-armed
+            // connect could stay unregistered for hours.
+            ownership = .armed(p)
+            armDelayUntil = holdOffUntil
+            lock.unlock()
+            p.delegate = self
+            central.connect(p, options: [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: Int(wait.rounded(.up)))])
+            scheduleArmScan(after: wait)
+            dlog("ble", "armed — iOS starts the connect to \(p.identifier.uuidString.suffix(12)) in \(Int(wait.rounded(.up))) s (hold-off)")
+            return
+        }
+        if wait > 0 {
             // Arm again when the hold-off ends; nothing else would.
             if holdOffTimer == nil {
                 let work = DispatchWorkItem { [weak self] in
@@ -354,6 +380,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             return
         }
         ownership = .armed(p)
+        armDelayUntil = nil
         lock.unlock()
         if let p {
             p.delegate = self
@@ -367,6 +394,22 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         startArmScan()
         let known = p.map { String($0.identifier.uuidString.suffix(12)) } ?? "<no known id>"
         dlog("ble", "armed — pending connect to \(known) plus a filtered scan for a new address (iOS wakes us for either)")
+    }
+
+    /// Start the address scan once a hold-off is over. A scan during the hold-off
+    /// would find the advertising ring at once and defeat it. If iOS suspends the
+    /// app first, the work runs at the next wake; the pending connect does not wait.
+    private func scheduleArmScan(after wait: TimeInterval) {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); self.armScanTimer = nil; self.lock.unlock()
+            self.startArmScan()
+        }
+        lock.lock()
+        armScanTimer?.cancel()
+        armScanTimer = work
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + wait, execute: work)
     }
 
     /// The ring rotates its Bluetooth address while unbonded, so a pending connect on
@@ -405,6 +448,8 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         default: break
         }
         if clear { ownership = .free }
+        armDelayUntil = nil
+        armScanTimer?.cancel(); armScanTimer = nil
         lock.unlock()
         stopArmScan()
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
@@ -418,6 +463,8 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         lock.lock()
         ownership = .owned(trigger, t)
         parkedWakeTimer?.cancel(); parkedWakeTimer = nil
+        armDelayUntil = nil
+        armScanTimer?.cancel(); armScanTimer = nil
         lock.unlock()
         stopArmScan()
         peripheral.delegate = t
@@ -425,8 +472,9 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     }
 
     /// Give the link back after a sync, then arm (or park) for the next wake.
-    /// `holdOff` blocks a re-arm for a while: a ring on its charger reconnects the
-    /// moment we drop it, and a wake that found nothing must not loop.
+    /// `holdOff` delays the next connect: a ring on its charger reconnects the moment
+    /// we drop it, and a wake that found nothing must not loop. The pending connect is
+    /// registered at once with a system start delay (see `arm`).
     func release(_ transport: BLETransport, policy: LinkPolicy, holdOff: TimeInterval = 0) {
         let p = transport.peripheral
         lock.lock()
@@ -620,6 +668,21 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             return
         }
         if armed {
+            lock.lock()
+            let due = armDelayUntil
+            armDelayUntil = nil
+            lock.unlock()
+            if let due, due.timeIntervalSinceNow > 60 {
+                // iOS connected long before the start delay ended, so it ignores the
+                // option. Drop this link and use the app timer from now on; otherwise a
+                // ring that advertises right after a release reconnects in a loop.
+                Self.startDelayIgnored = true
+                dlog("ble", "iOS connected \(Int(due.timeIntervalSinceNow)) s before the start delay ended — using the app timer for hold-offs from now on")
+                lock.lock(); ownership = .free; lock.unlock()
+                central.cancelPeripheralConnection(peripheral)
+                arm()
+                return
+            }
             dlog("ble", "armed connect fired — waking the sync")
             lock.lock(); ownership = .parked(peripheral); lock.unlock()
             stopArmScan()

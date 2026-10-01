@@ -3,6 +3,11 @@ use serde_json::Value;
 // A ring timestamp is a per-boot decisecond counter. `time_sync` and `rtc_beacon`
 // events are the authoritative bridge from that counter to UTC; captured_unix is only when the
 // phone downloaded the event and is therefore an epoch-selection hint/fallback.
+//
+// A `ring_start` event also starts a new epoch, even when the counter continues
+// instead of going back to zero: after a flat battery the Gen3 ring keeps its
+// counter value but the counter stood still while the ring was off, so an anchor
+// from before the restart puts every later event hours too early.
 #[derive(Clone, Debug)]
 struct Epoch {
     min_ds: i64,
@@ -14,6 +19,8 @@ struct Epoch {
 }
 
 const RESET_SLACK_DS: i64 = 6 * 3600 * 10;
+const RING_START_TAG: u8 = 0x41;
+const ANCHOR_WINDOW_DS: i64 = 24 * 3600 * 10;
 // A history event cannot legitimately occur well after the phone captured it.
 // A few hours tolerate clock corrections/timezone setup without allowing a replayed
 // pre-reboot high ds value to fabricate weeks of future data.
@@ -35,8 +42,9 @@ impl RingClock {
         // The id tie-breaker matters: a full-history drain inserts thousands of
         // events in the same second, including the backward jump at a reboot.
         for (ds, tag, json, captured) in events {
+            let restart = *tag == RING_START_TAG;
             match epochs.last_mut() {
-                Some(e) if *ds >= e.max_ds - RESET_SLACK_DS => {
+                Some(e) if !restart && *ds >= e.max_ds - RESET_SLACK_DS => {
                     if *ds >= e.max_ds {
                         e.max_ds = *ds;
                         e.fallback_anchor_unix = *captured;
@@ -84,26 +92,39 @@ impl RingClock {
 
     pub(crate) fn unix_s(&self, ds: i64, captured_unix: i64) -> f64 {
         let epoch = self.epoch_for(ds, captured_unix);
-        if let Some((anchor_ds, anchor_unix)) = epoch
+        // The ring stamps an event with its clock, or with the previous stamp + 1
+        // when events come faster than the clock ticks. A stamp is never behind the
+        // clock, so the anchor with the largest `unix - ds` has the least lead.
+        // Only anchors within a day compete, which keeps clock drift out of it;
+        // with none that close, the nearest anchor is used.
+        let nearby = epoch
             .anchors
             .iter()
-            .min_by_key(|(a, _)| (*a as i128 - ds as i128).unsigned_abs())
-        {
+            .filter(|(a, _)| (*a - ds).abs() <= ANCHOR_WINDOW_DS)
+            .max_by_key(|(a, unix)| unix * 10 - a);
+        let nearest = || {
+            epoch
+                .anchors
+                .iter()
+                .min_by_key(|(a, _)| (*a as i128 - ds as i128).unsigned_abs())
+        };
+        if let Some((anchor_ds, anchor_unix)) = nearby.or_else(nearest) {
             let predicted = *anchor_unix as f64 + (ds - *anchor_ds) as f64 / 10.0;
             if predicted <= captured_unix as f64 + FUTURE_SLACK_S {
                 return predicted;
             }
+            // A cursor rebase can replay an old boot after the newer boot was already
+            // stored. Duplicate anchors are ignored by SQLite, while previously unseen
+            // high-ds events are appended at today's capture time and can look like a
+            // continuation of the new boot. If that epoch predicts the future, select
+            // the most recent globally plausible time-sync projection instead.
+            if let Some(predicted) = self.latest_plausible_projection(ds, captured_unix) {
+                return predicted;
+            }
         }
 
-        // A cursor rebase can replay an old boot after the newer boot was already
-        // stored. Duplicate anchors are ignored by SQLite, while previously unseen
-        // high-ds events are appended at today's capture time and can look like a
-        // continuation of the new boot. If that epoch predicts the future, select the
-        // most recent globally plausible time-sync projection instead.
-        if let Some(predicted) = self.latest_plausible_projection(ds, captured_unix) {
-            return predicted;
-        }
-
+        // No anchor in this epoch: an anchor from another boot says nothing about
+        // it, so place the epoch's newest event at the time the phone captured it.
         (epoch.fallback_anchor_unix as f64 - (epoch.max_ds - ds) as f64 / 10.0)
             .min(captured_unix as f64 + FUTURE_SLACK_S)
     }
@@ -127,17 +148,27 @@ impl RingClock {
     }
 
     fn epoch_for(&self, ds: i64, captured_unix: i64) -> &Epoch {
+        let capture_distance = |e: &&Epoch| {
+            if captured_unix < e.capture_min {
+                (e.capture_min - captured_unix) as u64
+            } else if captured_unix > e.capture_max {
+                (captured_unix - e.capture_max) as u64
+            } else {
+                0
+            }
+        };
+        // Epochs split at a restart touch each other on the counter, and one sync
+        // can capture both sides, so an epoch that holds `ds` wins over one that is
+        // only within the reset slack.
         self.epochs
             .iter()
-            .filter(|e| ds >= e.min_ds - RESET_SLACK_DS && ds <= e.max_ds + RESET_SLACK_DS)
-            .min_by_key(|e| {
-                if captured_unix < e.capture_min {
-                    (e.capture_min - captured_unix) as u64
-                } else if captured_unix > e.capture_max {
-                    (captured_unix - e.capture_max) as u64
-                } else {
-                    0
-                }
+            .filter(|e| e.min_ds <= ds && ds <= e.max_ds)
+            .min_by_key(capture_distance)
+            .or_else(|| {
+                self.epochs
+                    .iter()
+                    .filter(|e| ds >= e.min_ds - RESET_SLACK_DS && ds <= e.max_ds + RESET_SLACK_DS)
+                    .min_by_key(capture_distance)
             })
             .unwrap_or_else(|| self.epochs.last().expect("events is non-empty"))
     }
@@ -177,6 +208,37 @@ mod tests {
         ]);
         let got = clock.unix_s(5_266_813, 1_783_543_500);
         assert!((got - 1_783_464_210.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn restart_with_a_paused_counter_does_not_reuse_the_old_anchor() {
+        // Flat battery: the counter stands still from ds 105_000 until the ring
+        // starts again 25 h later at ds 110_000. One sync captures both sides.
+        let clock = RingClock::from_events(&[
+            event(10_000, 0x42, r#"{"unix_time":1000000}"#, 1_000_000),
+            event(100_000, 1, "{}", 1_009_000),
+            event(105_000, 1, "{}", 1_102_600),
+            event(110_000, RING_START_TAG, "{}", 1_102_600),
+            event(146_000, 1, "{}", 1_102_600),
+        ]);
+        // After the restart: the newest event lands at the capture time.
+        assert_eq!(clock.unix_s(146_000, 1_102_600), 1_102_600.0);
+        assert_eq!(clock.unix_s(128_000, 1_102_600), 1_100_800.0);
+        // Before the restart: still the time_sync anchor.
+        assert_eq!(clock.unix_s(105_000, 1_102_600), 1_009_500.0);
+    }
+
+    #[test]
+    fn anchor_with_the_least_lead_wins() {
+        // A burst of events pushed the stamps 1_000 s ahead of the clock; the
+        // first time_sync after it carries that lead, a later one does not.
+        let clock = RingClock::from_events(&[
+            event(100_000, 1, "{}", 1_000_000),
+            event(130_000, 0x42, r#"{"unix_time":1002000}"#, 1_002_100),
+            event(150_000, 0x42, r#"{"unix_time":1005000}"#, 1_005_100),
+        ]);
+        // Offsets: 10_020_000 - 130_000 = 9_890_000 and 10_050_000 - 150_000 = 9_900_000.
+        assert_eq!(clock.unix_s(100_000, 1_000_000), 1_000_000.0);
     }
 
     #[test]

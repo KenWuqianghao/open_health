@@ -1274,14 +1274,26 @@ public struct SyncReport {
     public var eventsSynced: UInt32
     public var inserted: UInt32
     public var nextCursor: UInt32
+    /**
+     * At least one of the two clock writes at the end of the sync went out without
+     * a link error. The ring does not answer them; the proof is its `time_sync`
+     * event in the next drain.
+     */
+    public var clockWritten: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(serial: String, eventsSynced: UInt32, inserted: UInt32, nextCursor: UInt32) {
+    public init(serial: String, eventsSynced: UInt32, inserted: UInt32, nextCursor: UInt32, 
+        /**
+         * At least one of the two clock writes at the end of the sync went out without
+         * a link error. The ring does not answer them; the proof is its `time_sync`
+         * event in the next drain.
+         */clockWritten: Bool) {
         self.serial = serial
         self.eventsSynced = eventsSynced
         self.inserted = inserted
         self.nextCursor = nextCursor
+        self.clockWritten = clockWritten
     }
 }
 
@@ -1301,6 +1313,9 @@ extension SyncReport: Equatable, Hashable {
         if lhs.nextCursor != rhs.nextCursor {
             return false
         }
+        if lhs.clockWritten != rhs.clockWritten {
+            return false
+        }
         return true
     }
 
@@ -1309,6 +1324,7 @@ extension SyncReport: Equatable, Hashable {
         hasher.combine(eventsSynced)
         hasher.combine(inserted)
         hasher.combine(nextCursor)
+        hasher.combine(clockWritten)
     }
 }
 
@@ -1323,7 +1339,8 @@ public struct FfiConverterTypeSyncReport: FfiConverterRustBuffer {
                 serial: FfiConverterString.read(from: &buf), 
                 eventsSynced: FfiConverterUInt32.read(from: &buf), 
                 inserted: FfiConverterUInt32.read(from: &buf), 
-                nextCursor: FfiConverterUInt32.read(from: &buf)
+                nextCursor: FfiConverterUInt32.read(from: &buf), 
+                clockWritten: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1332,6 +1349,7 @@ public struct FfiConverterTypeSyncReport: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.eventsSynced, into: &buf)
         FfiConverterUInt32.write(value.inserted, into: &buf)
         FfiConverterUInt32.write(value.nextCursor, into: &buf)
+        FfiConverterBool.write(value.clockWritten, into: &buf)
     }
 }
 

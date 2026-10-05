@@ -21,58 +21,29 @@ The gap was **accumulated local state**, plus one app/account setting:
 | HRV/RHR/temp/sleep/MET **baselines** | **local state** | trailing-14-day mean, accrued nightly |
 | Activity goal (Meet Daily Targets) | **app/account** (`DbDailyActivity.target_calories`, adaptive) | not reproduced — Activity stays goal-gated |
 
-## Pipeline
+## Where it runs now
 
-```
-oura sync                      # raw events → oura.db (nightly)
-tools/calibrate_scores.py      # trends export → local/score_params.json   (one-time / per export)
-tools/build_daily.py           # per night: SleepNet + HRV/RHR/recovery/temp/MET → daily_summary + baselines
-tools/score_readiness.py       # daily_summary + baselines + params → Readiness Score
-```
+`oura-summary` computes the per-day values and the scores when it builds the summary
+(`oura-analysis::scores`). It writes the per-day values to the `daily_summary` table in
+`oura.db` (`extras::daily_rows`). No separate script is necessary.
 
-`oura sleep-score` and `oura readiness-score` wrap this; `readiness-score` rebuilds
-`daily_summary` first, then scores.
+`tools/calibrate_scores.py` fits the combiner weights and the contributor curves from a
+trends export and writes `local/score_params.json` (gitignored: personal calibration).
+It is an analysis tool. The summary does not read that file.
 
-### Calibration is persisted (no CSV at runtime)
-
-`tools/calibrate_scores.py` fits the combiner weights + every contributor curve from
-a trends export **once** and writes `local/score_params.json` (gitignored — personal
-calibration). All live scorers load that file, so they never need the CSV again. Put
-the export at `local/trends.csv` (or pass `--csv`) and re-run after a longer export.
-Drivers are **ring-compatible** (`LIVE_DRIVERS`): e.g. Restfulness uses awake-fraction
-+ efficiency, not the movement micro-inputs the analysis-only `fit_scores_all.py` uses.
-
-### `daily_summary` table (in oura.db)
-
-One row per bedtime night: sleep metrics + `sleep_score`, `hrv_avg`, `rhr_low/avg`,
-`recovery_index_h`, `temp_mean`/`temp_dev`, `met_avg`, the five trailing-14-day
-baselines (`hrv/rhr/temp/sleep/met_baseline`), and `n_history` (days of prior data).
-Re-runnable; baselines are causal (trailing only).
-
-### Recovery Index (new, single-night)
+### Recovery Index (single-night)
 
 From the overnight HR series (IBI → bpm, rolling-median smoothed) we find when resting
-HR bottoms out and report **hours between that minimum and wake** — Oura's Recovery
-Index (the earlier RHR settles, the more recovered). No history needed. We compute the
-raw hours today; mapping hours → 0-100 sub-score isn't calibratable from the export
-(it has no raw recovery column), so that one sub-score uses a constant fallback (flagged).
+HR bottoms out and report **hours between that minimum and wake**: Oura's Recovery
+Index (the earlier RHR settles, the more recovered). No history is necessary.
 
 ## Maturity: baselines need ~14 days
 
 The baseline-relative contributors compare today to a personal ~14-day baseline. With
 fewer days the baseline is **cold** (falls back to the current value → neutral
 deviation) and the Readiness number is **provisional** — the scorer flags each cold
-contributor and prints how many days of history exist. After ~2 weeks of nightly sync
-they mature and Readiness becomes as live as Sleep. Example on 6 days of history:
-
-```
-Readiness Score … history 6 day(s)  ⚠ baselines still maturing (<14d) — provisional
-  inputs: HRV 111/92ms  RHR 34/35.6bpm  recovery 3.17h  tempΔ +0.23°C
-  Resting Heart Rate Score   17%  100  17.0 ~baseline-cold
-  HRV Balance Score          15%   82  12.4 ~baseline-cold
-  …
-  READINESS SCORE                          76
-```
+contributor. After ~2 weeks of nightly sync they mature and Readiness becomes as live
+as Sleep.
 
 ## What's still gated
 

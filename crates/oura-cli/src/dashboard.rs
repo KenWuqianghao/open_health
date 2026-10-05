@@ -3,9 +3,9 @@
 //!
 //! Rust owns the DB + every non-model calculation (per-night HRV/RHR/skin-temp,
 //! SpO2 % via Oura's calibration, device/data-health, baselines + deltas, the
-//! digest) and the HTTP server. The torch models (sleep hypnogram, activity, CVA)
-//! run through the Python runners, shelled out exactly like `oura sessions`. All
-//! data stays on this machine.
+//! digest) and the HTTP server. This repository has no models. `OURA_MODEL_RUNNER`
+//! can name an external program that adds model results (see `ExternalRunner`).
+//! All data stays on this machine.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -60,133 +60,57 @@ fn validate_ring_key(key: &str) -> Result<String> {
     Ok(key.to_ascii_lowercase())
 }
 
-// ── python model orchestration (shared with `oura sessions` via `pyrunner`) ────
+/// The checkout that holds `dashboard/web`, when the binary runs inside one.
 fn repo_root() -> Option<PathBuf> {
-    crate::pyrunner::repo_root(Path::new("tools/run_activity_model.py"))
+    crate::pyrunner::repo_root(Path::new("dashboard/web/index.html"))
 }
 
-fn python_bin(root: &Path) -> PathBuf {
-    crate::pyrunner::venv_python(root)
-}
-
-/// Run a python runner and parse its `--json` stdout. Returns None on any failure
-/// (missing venv/model, night with no data, …) so the dashboard degrades softly.
-fn run_py_json(root: &Path, py: &Path, script: &str, args: &[String]) -> Option<Value> {
-    let out = Command::new(py)
-        .current_dir(root)
-        .arg(root.join(script))
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&out.stdout).ok()
-}
-
-/// Like `run_py_json` but feeds `stdin` to the process — used for the batched sleep
-/// runner, which reads its list of night ranges from stdin. The payload is small
-/// (a few night pairs), so writing it before draining stdout can't deadlock.
-fn run_py_json_stdin(
-    root: &Path,
-    py: &Path,
-    script: &str,
-    args: &[String],
-    stdin: &[u8],
-) -> Option<Value> {
-    use std::io::Write;
-    let mut child = Command::new(py)
-        .current_dir(root)
-        .arg(root.join(script))
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(stdin).ok()?; // dropped here → EOF
-    let out = child.wait_with_output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&out.stdout).ok()
-}
-
-/// The web dashboard's [`ModelRunner`]: shells out to the Python torch runners,
-/// exactly as before. The native client supplies an on-device `.ptl` runner.
-struct PythonRunner;
-impl ModelRunner for PythonRunner {
+// ── the model seam ─────────────────────────────────────────────────────────────
+/// This repository has no models. `OURA_MODEL_RUNNER` can name a program that adds
+/// them. The program reads one JSON request on standard input:
+/// `{"db", "tz", "profile", "sleep_ranges": [[start_ds, end_ds], …]}`. It writes
+/// one JSON object with any of `sleep_batch`, `cva`, `activity`, `illness`
+/// (the shapes that [`ModelOutputs`] documents). A failure gives the summary
+/// without models.
+struct ExternalRunner(PathBuf);
+impl ModelRunner for ExternalRunner {
     fn run(&self, input: ModelInputs) -> ModelOutputs {
-        let ModelInputs {
-            db,
-            tz,
-            demo,
-            sleep_ranges,
-        } = input;
-        let root = repo_root();
-        let py = root.as_deref().map(python_bin);
-        let sleep_stdin = serde_json::to_vec(sleep_ranges).unwrap_or_default();
-        let sleep_args = vec![
-            db.display().to_string(),
-            tz.to_string(),
-            "--json".into(),
-            "--batch".into(),
-        ];
-        let cva_args = vec![
-            db.display().to_string(),
-            "--json".into(),
-            "--sex".into(),
-            demo.sex.to_string(),
-            "--age".into(),
-            demo.age.to_string(),
-            "--height".into(),
-            demo.height_m.to_string(),
-            "--weight".into(),
-            demo.weight_kg.to_string(),
-            "--ring".into(),
-            demo.ring_size.to_string(),
-        ];
-        let act_args = vec![
-            db.display().to_string(),
-            "--tz".into(),
-            tz.to_string(),
-            "--json".into(),
-        ];
-        let illness_args = vec![
-            db.display().to_string(),
-            tz.to_string(),
-            "--json".into(),
-        ];
-
-        let (sleep_batch, cva, activity, illness) = match (root.as_deref(), py.as_deref()) {
-            (Some(r), Some(p)) => std::thread::scope(|s| {
-                let sh = s.spawn(|| {
-                    run_py_json_stdin(r, p, "tools/run_sleep_model.py", &sleep_args, &sleep_stdin)
-                });
-                let ch = s.spawn(|| run_py_json(r, p, "tools/run_cva_model.py", &cva_args));
-                let ah = s.spawn(|| run_py_json(r, p, "tools/run_activity_model.py", &act_args));
-                let ih = s.spawn(|| run_py_json(r, p, "tools/run_illness_model.py", &illness_args));
-                (
-                    sh.join().ok().flatten(),
-                    ch.join().ok().flatten(),
-                    ah.join().ok().flatten(),
-                    ih.join().ok().flatten(),
-                )
-            }),
-            _ => (None, None, None, None),
-        };
+        use std::io::Write;
+        let request = json!({
+            "db": input.db,
+            "tz": input.tz,
+            "profile": input.demo.to_json(),
+            "sleep_ranges": input.sleep_ranges,
+        });
+        let reply = (|| -> Option<Value> {
+            let mut child = Command::new(&self.0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .ok()?;
+            child.stdin.take()?.write_all(request.to_string().as_bytes()).ok()?; // dropped here → EOF
+            let out = child.wait_with_output().ok()?;
+            out.status.success().then(|| serde_json::from_slice(&out.stdout).ok())?
+        })();
+        let Some(mut reply) = reply else { return ModelOutputs::default() };
+        let mut take = |key: &str| reply.get_mut(key).map(Value::take).filter(|v| !v.is_null());
         ModelOutputs {
-            sleep_batch,
-            cva,
-            activity,
-            illness,
+            sleep_batch: take("sleep_batch"),
+            cva: take("cva"),
+            activity: take("activity"),
+            illness: take("illness"),
         }
     }
 }
 
-/// `build_summary` for the web dashboard — runs the models via Python.
-fn build_summary(db: &Path, tz: i64) -> Result<Value> {
-    oura_summary::build_summary(db, tz, &PythonRunner)
+/// `build_summary` for the dashboard and the hub push: with the external model
+/// runner when `OURA_MODEL_RUNNER` is set, else without models.
+pub(crate) fn build_summary(db: &Path, tz: i64) -> Result<Value> {
+    match std::env::var_os("OURA_MODEL_RUNNER") {
+        Some(program) => oura_summary::build_summary(db, tz, &ExternalRunner(program.into())),
+        None => oura_summary::build_summary(db, tz, &oura_summary::NoModelRunner),
+    }
 }
 
 /// Build the summary and POST it to an `oura-hub`. Returns the hub's reply.
@@ -212,7 +136,7 @@ pub fn push(db: &Path, tz: i64, hub_url: &str, token: &str) -> Result<Value> {
 }
 
 // ── summary cache ─────────────────────────────────────────────────────────────
-// build_summary spawns torch subprocesses (~seconds); without a cache every page
+// build_summary can start an external model runner (~seconds); without a cache every page
 // load re-pays that. We memoise the last result and reuse it until the inputs
 // change — the DB (a sync appends events) or profile.json (an edit changes the CVA
 // inputs / weight-based kcal). Both are cheap mtime stats, so a sync or profile
@@ -581,7 +505,7 @@ async fn handle(
             json_resp(&mut sock, &v).await
         }
         ("GET", "/api/summary") => {
-            // building the summary shells out to torch models → off the async
+            // building the summary can start an external model runner → off the async
             // executor; cached so only the first load (or post-sync/edit) pays for it.
             let body = tokio::task::spawn_blocking(move || cached_summary(&db, tz))
                 .await

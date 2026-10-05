@@ -463,9 +463,9 @@ function renderSleepDebt(d) {
   button.addEventListener("click", () => openSleepDebt(sd)); box.append(button);
 }
 
-// Symptom Radar: Oura's on-device illness-detection model. Traffic-light state from the
-// calibrated decision + the biomarkers (breath / lowest HR / HRV / temp) that deviate
-// from your personal baseline. See docs/algorithms/illness-detection.md.
+// Symptom Radar: the illness check (rules, or a model result from an add-on).
+// Traffic-light state + the biomarkers (breath / lowest HR / HRV / temp) that deviate
+// from your personal baseline.
 const ILLNESS_COPY = {
   NO_SIGNS: "No signs of illness. Your biometrics are within your normal range.",
   MINOR_SIGNS: "Minor signs. A few biometrics are outside your usual range — worth an easy day.",

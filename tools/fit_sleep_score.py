@@ -83,7 +83,7 @@ def engineer(rows):
         r["mid_opt"] = -((h - 27.0) ** 2) if h is not None else None  # peak at 03:00
         prev = [x for x in mids[-7:] if x is not None]
         if h is not None and prev:
-            # circular mean + distance on the 24h clock (matches tools/score_sleep.py),
+            # circular mean + distance on the 24h clock,
             # so a schedule that straddles a wrap isn't scored as wildly irregular.
             ang = np.array(prev) * (np.pi / 12.0)
             mh = (np.arctan2(np.sin(ang).mean(), np.cos(ang).mean()) % (2 * np.pi)) * (12.0 / np.pi)

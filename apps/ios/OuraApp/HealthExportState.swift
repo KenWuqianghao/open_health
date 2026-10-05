@@ -37,7 +37,7 @@ struct HealthExportState: Codable, Equatable {
     var deferredForUnlock = false
 }
 
-/// A JSON file next to the DB (the `ModelCacheStore` pattern): hundreds of day
+/// A JSON file next to the DB: hundreds of day
 /// entries plus interval ledgers do not belong in UserDefaults.
 enum HealthExportStateStore {
     private static let queue = DispatchQueue(label: "md.thomas.openoura.health-state", qos: .utility)

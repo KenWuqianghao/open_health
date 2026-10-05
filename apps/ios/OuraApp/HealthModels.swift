@@ -63,7 +63,7 @@ struct StageTrack: Equatable {
     var codes: [Int]
 }
 
-/// A detected workout the torch build supplies (empty in the model-free build).
+/// A detected workout from the summary (from the MET minutes, or from a plugin).
 struct WorkoutInput: Equatable {
     var id: String
     var label: String

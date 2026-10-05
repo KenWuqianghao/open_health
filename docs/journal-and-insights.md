@@ -150,4 +150,4 @@ screen says so.
 | Profile on the ring (`0x20`) | only the empty-value frames are known, not the value format |
 | Step counts from `0x51`/`0x52` | the official parser has no layout for these events |
 | Oura's stress, resilience and cycle models | cloud scores or models that depend on them; the app has estimates |
-| Vascular age without the model | needs the CVA model (torch build) |
+| Vascular age without the model | needs Oura's cardiovascular-age model (add-on only) |

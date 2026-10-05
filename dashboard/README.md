@@ -25,11 +25,11 @@ Default port `8090`; loopback-only.
   events; shown in the header and the Device panel.
 - **Your details** (the person icon): edit age / sex / height / weight / ring size.
   The ring can't measure these, so they live in an editable, gitignored
-  `profile.json` next to `oura.db` and feed the cardiovascular-age model (the runners
-  read it too). `--age/--sex/--height/--weight` only seed it on first run.
-- **Activity**: detected sessions (Oura's `automatic_activity_detection`) plotted on a
+  `profile.json` next to `oura.db` and feed the energy and VO2max estimates.
+  `--age/--sex/--height/--weight` only seed it on first run.
+- **Activity**: workouts found from the MET minutes, plotted on a
   per-day actogram over a continuous MET "movement ridge"; tap a session for its time,
-  duration, model label, and **estimated active calories** (Σ(MET−1)·weight/60).
+  duration, label, and **estimated active calories** (Σ(MET−1)·weight/60).
 - **Advanced & debugging** (collapsed, in the Device panel):
   - **Ring auth key — Export / Import.** *Export* shows the 16-byte key (copy, `.key`
     download, or QR) so you can move it to another device — e.g. set up the native iOS
@@ -56,13 +56,12 @@ actual state. It's best-effort — a failed read never fails the sync.
   `POST /api/feature` (toggle a capability), and `GET/POST /api/ring-key`. Mutating
   endpoints require a same-origin `X-Oura-Dash` header (CSRF guard) and the server is
   loopback-only with a Host-header check.
-- **The AI models run via the Python runners**, shelled out exactly like
-  `oura sessions`: the sleep hypnogram (`run_sleep_model.py`), activity sessions
-  (`run_activity_model.py`), and cardiovascular age (`run_cva_model.py`). Each is
-  invoked with `--json`. `/api/summary` runs them **concurrently** (sleep scores every
-  night in one batched process) and **caches** the result, recomputing only when
-  `oura.db` or `profile.json` changes — so the first load pays the cost and refreshes
-  are instant.
+- **No models**: the dashboard uses the ring's own hypnogram, the rule-based illness
+  check, and workouts from the MET minutes. An add-on can supply model results: set
+  `OURA_MODEL_RUNNER` to a program that reads one JSON request on standard input and
+  writes one JSON object (see `ExternalRunner` in `dashboard.rs`). `/api/summary`
+  **caches** the result and computes it again only when `oura.db` or `profile.json`
+  changes.
 - **Frontend** (`dashboard/web/`): vanilla HTML/CSS/JS, no build step, no external
   fonts or libraries. Auto light/dark via `prefers-color-scheme` (force one with
   `?` … set `document.documentElement.dataset.theme = 'dark' | 'light'`). The web
@@ -79,13 +78,6 @@ dashboard/
     app.js
   README.md
 ```
-
-Models are Oura's proprietary IP and are **not** committed; the runners reference
-your own locally-decrypted copies under `notes/models/`. After a split checkout,
-the sibling `../open_oura/notes/models/` is detected automatically; set
-`OURA_MODELS_DIR=/absolute/path/to/models` for any other layout. The sibling
-`../open_oura/.venv` is likewise reused when present; override its interpreter
-with `OURA_PYTHON=/absolute/path/to/python`.
 
 Icons are from [Phosphor](https://phosphoricons.com) (MIT), vendored under
 `dashboard/web/icons/` so the dashboard stays fully offline.

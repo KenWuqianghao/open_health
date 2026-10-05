@@ -4,8 +4,8 @@ import SwiftUI
 // ── the shared build_summary() JSON, decoded (same contract as the web client) ──
 // SIBLING CLIENT: the web dashboard (dashboard/web/app.js) renders the SAME summary
 // JSON. A user-facing change here usually belongs there too — see the feature map in
-// docs/clients-web-and-ios.md. New computed fields go in crates/oura-summary; new
-// models get an on-device path (TorchBridge.mm + *Model.swift) AND a Python runner.
+// docs/clients-web-and-ios.md. New computed fields go in crates/oura-summary. Model
+// results come only from an add-on (SummaryPlugin.swift).
 
 struct Trend: Codable {
     var series: [Double] = []
@@ -222,8 +222,8 @@ struct MeasuringFeature: Codable, Identifiable {
     var feature: String
     var id: String { feature }
 }
-// Symptom Radar (on-device illness detection). Mirrors the web summary's `illness`
-// block; computed on-device by IllnessModel so it isn't part of the FFI JSON.
+// Symptom Radar (illness check). Mirrors the web summary's `illness` block. A
+// plugin can set it on the phone, so it is not always part of the FFI JSON.
 struct IllnessBiomarker: Identifiable {
     let type: String        // AverageBreath | LowestHeartRate | AverageHrv | TemperatureDeviation
     let value: Double

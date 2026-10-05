@@ -11,9 +11,9 @@ name = "oura"
 path = "src/main.rs"
 
 [dependencies]
-oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
-oura-link = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
-oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
+oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "4c83f0d84b00a9a189fbc70305d105de0c435f3d" }
+oura-link = { git = "https://github.com/KenWuqianghao/open_oura", rev = "4c83f0d84b00a9a189fbc70305d105de0c435f3d" }
+oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "4c83f0d84b00a9a189fbc70305d105de0c435f3d" }
 oura-summary = { path = "../oura-summary" }
 oura-dna = { path = "../oura-dna" }
 clap = { version = "4", features = ["derive", "env"] }
@@ -30,14 +30,3 @@ sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tch = { version = "=0.22.0", optional = true } # pinned to libtorch 2.9.0 (repo venv)
-
-[features]
-# Run the activity model in-process via LibTorch instead of shelling out to
-# tools/run_activity_model.py. On Apple Silicon the only libtorch is the pip
-# wheel, so the repo venv is aligned to torch 2.9.0 — the exact version tch 0.22
-# targets — and we link against it (no version-check bypass needed). build.rs
-# bakes the rpath, so no DYLD_LIBRARY_PATH at runtime:
-#   export PATH="$PWD/.venv/bin:$PATH" LIBTORCH_USE_PYTORCH=1
-#   cargo run --features torch -- sessions --tz-offset 1
-torch = ["dep:tch"]

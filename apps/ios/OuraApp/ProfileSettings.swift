@@ -323,7 +323,7 @@ struct ProfileSettingsView: View {
                     if health.enabled {
                         Toggle("Include resting energy (estimate)", isOn: $health.includeBasal)
                         DisclosureGroup("What is exported") {
-                            Text("Sleep: in-bed time, and sleep stages when the on-device models are available.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts when the on-device models detect them.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
+                            Text("Sleep: in-bed time and sleep stages.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts that the app finds from your movement.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                         Button { health.schedule(.manual(full: false)) } label: {

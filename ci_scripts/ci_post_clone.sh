@@ -1,8 +1,7 @@
 #!/bin/sh
 # Xcode Cloud post-clone: a clean cloud checkout has no OuraCore.xcframework and no
 # OuraApp.xcodeproj (both gitignored), so build the Rust UniFFI xcframework and
-# generate the MODEL-FREE Xcode project the workflow archives. The torch models
-# (libtorch + .ptl) are NOT part of CI — they live only in the local project.yml.
+# generate the Xcode project the workflow archives. The app has no models.
 set -e
 echo "=== ci_post_clone: Rust xcframework + xcodegen (model-free) ==="
 

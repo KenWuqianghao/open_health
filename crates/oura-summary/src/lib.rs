@@ -4,8 +4,8 @@
 //! is this crate, so they can't drift.
 //!
 //! The ML models (sleep hypnogram, cardiovascular age, activity sessions) are an
-//! injected [`ModelRunner`]: `oura-cli` shells out to the Python torch runners, the
-//! native client runs the `.ptl` models on-device (or supplies [`NoModelRunner`]).
+//! injected [`ModelRunner`]. This repository has no models: the clients supply
+//! [`NoModelRunner`], or `oura-cli` starts the program that `OURA_MODEL_RUNNER` names.
 //! Everything else here is pure Rust over the synced SQLite DB.
 //!
 //! A new field added to the JSON here surfaces in BOTH clients — but each must still
@@ -92,17 +92,17 @@ pub struct ModelInputs<'a> {
     pub sleep_ranges: &'a [[i64; 2]],
 }
 
-/// Raw model outputs, matching the Python runners' `--json` shape.
+/// Raw model outputs, as JSON, from an external runner.
 #[derive(Default)]
 pub struct ModelOutputs {
-    pub sleep_batch: Option<Value>, // run_sleep_model.py --batch
-    pub cva: Option<Value>,         // run_cva_model.py
-    pub activity: Option<Value>,    // run_activity_model.py
-    pub illness: Option<Value>,     // run_illness_model.py (Symptom Radar)
+    pub sleep_batch: Option<Value>, // one hypnogram per sleep range
+    pub cva: Option<Value>,         // cardiovascular age
+    pub activity: Option<Value>,    // activity sessions
+    pub illness: Option<Value>,     // Symptom Radar
 }
 
-/// Runs the torch models. `oura-cli` shells out to Python; the native client runs
-/// `.ptl` on-device. [`NoModelRunner`] degrades to the signal-derived panels only.
+/// Supplies the model results. This repository has no implementation that runs a
+/// model. [`NoModelRunner`] gives the signal-derived panels only.
 pub trait ModelRunner {
     fn run(&self, input: ModelInputs) -> ModelOutputs;
 }
@@ -1137,8 +1137,8 @@ fn make_digest(hrv: &VitalStat, rhr: &VitalStat) -> String {
     s
 }
 
-/// Assemble the full dashboard summary as a JSON value. The torch models are
-/// supplied by `runner` (Python subprocess on desktop, `.ptl` on-device).
+/// Assemble the full dashboard summary as a JSON value. `runner` supplies the
+/// model results, if there are any.
 pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Value> {
     build(db, tz, runner).map(|built| built.0)
 }
@@ -1335,7 +1335,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         }
     }
 
-    // the model seam — sleep / cva / activity (Python subprocess or on-device .ptl)
+    // the model seam: sleep / cva / activity / illness, from `runner`
     let sleep_ranges: Vec<[i64; 2]> = nights.iter().map(|nt| [nt.start_ds, nt.end_ds]).collect();
     let ModelOutputs {
         sleep_batch,
@@ -1479,7 +1479,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         } else {
             in_bed_s / 60.0 / full_stages.len() as f64
         };
-        // "model" (Oura's SleepNet) or "ring" (the ring's own pages).
+        // "model" (a runner's hypnogram) or "ring" (the ring's own pages).
         let stage_source = hyp.map(|h| h["source"].as_str().unwrap_or("model"));
         let stage_min = |code: i64| -> Option<f64> {
             (!full_stages.is_empty())
@@ -1662,7 +1662,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     let rest_days = journal.rest_days(today_idx);
     let beats = extras::daytime_beats(&events, unix_s_at, &night_facts, anchor_unix as f64);
     // The activity model's sessions when a runner gave them, else bouts from the
-    // MET minutes. The iOS torch build replaces the bouts with its own sessions.
+    // MET minutes. An iOS plugin can replace the bouts with its own sessions.
     let ring_workouts = if activity.is_empty() {
         extras::met_workouts(&met_min, &sleep_windows, weight, tz)
     } else {

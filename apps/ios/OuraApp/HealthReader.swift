@@ -157,6 +157,8 @@ struct HealthPage: @unchecked Sendable {
 protocol HealthReadClient: AnyObject, Sendable {
     var isAvailable: Bool { get }
     func requestRead(_ types: Set<HKObjectType>) async throws
+    /// Ask for write and read access in one sheet.
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws
     func page(_ type: HKSampleType, after anchor: HKQueryAnchor?, limit: Int) async throws -> HealthPage
     /// Ask iOS to wake the app when `type` changes.
     func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws
@@ -166,12 +168,23 @@ protocol HealthReadClient: AnyObject, Sendable {
     func observe(_ type: HKSampleType, fire: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) -> AnyObject
 }
 
+extension HealthReadClient {
+    /// One sheet for the write and the read types. A fake needs only `requestRead`.
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws {
+        try await requestRead(read)
+    }
+}
+
 final class HKReadClient: HealthReadClient, @unchecked Sendable {
     private let store = HKHealthStore()
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     func requestRead(_ types: Set<HKObjectType>) async throws {
         try await store.requestAuthorization(toShare: [], read: types)
+    }
+
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws {
+        try await store.requestAuthorization(toShare: share, read: read)
     }
 
     func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws {
@@ -477,7 +490,7 @@ final class HealthReader: ObservableObject {
         await HealthBackground.shared.start()
     }
 
-    private static let requestedCountKey = "health.read.requested-types"
+    private static let requestedCountKey = "health.access.requested-types-v2"
 
     /// HealthKit shows its sheet only for types it has not asked about. Call this in
     /// the foreground: after an update that adds types, the user sees the new ones.
@@ -486,7 +499,10 @@ final class HealthReader: ObservableObject {
         let count = HealthReadTypes.objectTypes.count
         guard enabled, isAvailable, UserDefaults.standard.integer(forKey: Self.requestedCountKey) != count else { return }
         do {
-            try await client.requestRead(HealthReadTypes.objectTypes)
+            // One sheet for both directions: a read-only request left every write type
+            // turned off on the phone (2026-10-06), and the export then wrote nothing.
+            let share = HealthExporter.shared.enabled ? HealthExportEngine.shareTypes : []
+            try await client.request(share: share, read: HealthReadTypes.objectTypes)
             UserDefaults.standard.set(count, forKey: Self.requestedCountKey)
             dlog("health-read", "read access asked for \(count) types")
         } catch {

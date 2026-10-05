@@ -13,7 +13,7 @@ import HealthKit
 /// - resting HR, respiratory rate (one per night, spanning the in-bed window),
 ///   SpO2 (1-min means, 0..1), steps and energy per hourly bucket.
 /// - distance is never written (a MET estimate of an estimate).
-/// - workouts only when the torch build supplies them; their energy is carved out of
+/// - workouts only when the summary has them; their energy is carved out of
 ///   the hourly buckets so day totals stay the same.
 enum HealthPlanner {
     static func plan(day: HealthDay, stages: StageTrack?, workouts: [WorkoutInput],

@@ -34,3 +34,4 @@ local/
 
 # Python bytecode
 __pycache__/
+apps/ios/OuraApp/project-*.local.yml

@@ -11,4 +11,4 @@ repository.workspace = true
 crate-type = ["staticlib", "lib"]
 
 [dependencies]
-oura-analysis = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
+oura-analysis = { git = "https://github.com/KenWuqianghao/open_oura", rev = "4c83f0d84b00a9a189fbc70305d105de0c435f3d" }

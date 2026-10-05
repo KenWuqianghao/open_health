@@ -2838,11 +2838,10 @@ public func storeSchemaVersion(dbPath: String) -> Int64 {
  * The full dashboard summary — the SAME `build_summary()` JSON the web client
  * renders, computed from the synced SQLite DB. `tz_offset` is hours from UTC.
  *
- * Models (sleep hypnogram / cardiovascular age / activity sessions) use a
- * [`oura_summary::ModelRunner`]; on-device we'll pass the `.ptl` torch runner.
- * For now [`oura_summary::NoModelRunner`] yields the signal-derived panels
- * (vitals, cardio trend, activity profile, device & data-health, digest) — most
- * of the dashboard — with model fields null until the torch runner is wired.
+ * The summary uses [`oura_summary::NoModelRunner`]: the signal-derived panels
+ * (vitals, cardio trend, activity profile, device & data-health, digest) and the
+ * ring's own hypnogram. The model fields are null. On iOS an add-on can set them
+ * through a `SummaryPlugin`.
  *
  * Returns the summary JSON string, or `{ "error": "…" }`.
  */
@@ -2915,7 +2914,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_oura_core_checksum_func_store_schema_version() != 1450) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_oura_core_checksum_func_summary_json() != 27782) {
+    if (uniffi_oura_core_checksum_func_summary_json() != 14892) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_write_demo_db() != 63621) {

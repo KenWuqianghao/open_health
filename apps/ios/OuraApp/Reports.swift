@@ -4,7 +4,7 @@ import Charts
 // Full-page, research-grade sleep & activity reports — the iOS counterpart to the web
 // dashboard's `sleepReport`/`activityReport` (see docs/clients-web-and-ios.md). The raw
 // per-night signal series arrive from build_summary (NightRow.series); the hypnogram is
-// the on-device SleepNet output (NightRow.stages, TORCH build). Sleep metrics + debt are
+// NightRow.stages (the ring's own pages, or a plugin's stages). Sleep metrics + debt are
 // computed here in Swift, mirroring crates/oura-summary so both clients agree.
 
 // ── science: hypnogram-derived metrics (mirror of oura-summary sleep_metrics) ──

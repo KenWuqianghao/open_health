@@ -24,7 +24,7 @@ use oura_dna::{build_report, pgs, Catalog, Genotype, ScoreSpec, TraitDef, VcfSou
 /// The repo `dna/` directory — holds `catalog.json` and the fetched PGS
 /// `scores/`. `None` when not running from within the repo tree.
 fn dna_dir() -> Option<PathBuf> {
-    crate::pyrunner::repo_root(Path::new("tools/run_activity_model.py")).map(|r| r.join("dna"))
+    crate::pyrunner::repo_root(Path::new("dna/files/.gitkeep")).map(|r| r.join("dna"))
 }
 
 fn catalog_path(dir: &Path) -> PathBuf {

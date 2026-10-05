@@ -3,9 +3,9 @@
 Oura computes its daily metrics **on the phone**, in the native `ecore` engine
 (`libappecore.so`) - not in the cloud (the cloud is storage/sync). The one
 exception is the **sleep hypnogram**: ecore *consumes* a pre-computed 30-second
-stage array and only produces the staging *features*; the stager itself is the
-on-device **SleepNet** PyTorch model (encrypted `*.pt.enc` in `oura_models.apk`)
-and/or the ring firmware. Everything *downstream of staging* is deterministic and
+stage array and only produces the staging *features*; the stager itself is Oura's
+**SleepNet** model in the official app and/or the ring firmware. This repository
+has no models: it reads the ring's own hypnogram (`sleep_phase_data` pages). Everything *downstream of staging* is deterministic and
 portable.
 
 This directory documents each metric we port into `oura-analysis`. Source
@@ -30,7 +30,7 @@ each is ported; this index is the status table.
 | Activity score + contributors | `get_activity_score_raw @ 0x1d5788` (per-contributor pw-interp, Y=[0,25,95,100]); combiner `@ 0x1d781c` | - | ◐ contributor curves + X-tables recovered; final-combiner divisor ambiguous - needs careful re-read |
 | Activity targets / cals / MET | `actinfo_target_to_cal @ 0x1cd2c8`, `actinfo_update_5_min_classification @ 0x1cd640` | `oura-analysis::metabolic` | ◐ VO2max/BMR/steps→m ported+tested; MET-class ordering + calorie/step regression best-effort |
 | Cycle prediction / tracking | `cycle_prediction_calculate @ 0x1e2864`, `cycle_tracking_calculate @ 0x1e4244` | - | ◐ day-type thresholds + 0.18–0.30 sine band recovered; fit_sin/sine_from_range unresolved - deferred |
-| **Sleep hypnogram (staging)** | SleepNet PyTorch model (`sleepstaging_2_6_0.pt.enc`) - not in ecore | - | ❌ blocked: AES-256-GCM decryption RE'd, but the key is **server-delivered** (see [sleepnet.md](sleepnet.md)) |
+| **Sleep hypnogram (staging)** | not in ecore (Oura's SleepNet model, or the ring firmware) | `oura-summary` reads the ring's `sleep_phase_data` pages | ✅ ring hypnogram, with deep sleep; an add-on can replace it through `OURA_MODEL_RUNNER` or a `SummaryPlugin` |
 
 ## Device vs cloud (corrected)
 
@@ -93,9 +93,8 @@ Restfulness + Timing). See [`score-weights.md`](score-weights.md).
 R²=0.06 — the gap is the baseline-relative / personalised-goal / multi-day-load
 contributors that need accumulated history, not missing logic.
 
-**Live from the ring:** `oura sleep-score` (today) and `oura readiness-score` —
-the latter accrues a per-day summary + rolling baselines nightly (`tools/build_daily.py`),
-including a from-scratch **Recovery Index** (overnight RHR-minimum→wake), and flags
-baseline-relative contributors provisional until ~14 days mature. Calibration is
-persisted once to `local/score_params.json`. See
+**Live from the ring:** `oura-summary` computes the Sleep, Readiness and Activity
+scores for each day (`scores.days` in the summary JSON) with `oura-analysis::scores`.
+It stores the per-day values in the `daily_summary` table. For the inputs and the
+baselines, see
 [`daily-summaries-and-baselines.md`](daily-summaries-and-baselines.md).

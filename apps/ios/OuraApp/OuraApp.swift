@@ -780,9 +780,7 @@ struct RootView: View {
 
     private func resetAndReload() {
         SummaryCache.clear()
-        #if TORCH
-        ModelCacheStore.clearAll()
-        #endif
+        Plugins.summary?.clearCache()
         reload()
     }
 
@@ -829,11 +827,10 @@ struct RootView: View {
         loadGeneration += 1
         let generation = loadGeneration
         IdleTimerLock.acquire("models")
-        #if TORCH
-        let publishBase = s == nil || clearCurrent
-        #else
-        let publishBase = true
-        #endif
+        // With a plugin, the full summary replaces the screen when it is ready; the
+        // base shows first only when the screen is empty.
+        let plugin = Plugins.summary
+        let publishBase = plugin == nil || s == nil || clearCurrent
         // Captured before the background hop: the last published summary is the
         // fallback if a model read fails mid-sync (withModels never replaces real
         // results with emptiness).
@@ -850,25 +847,21 @@ struct RootView: View {
                     s = base
                     SummaryCache.save(base)
                     HealthExporter.shared.schedule(.sync, summary: base)
-                    #if !TORCH
-                    published(base)
-                    #endif
+                    if plugin == nil { published(base) }
                 }
             }
-            #if TORCH
-            if base.error == nil {
-                let full = Core.withModels(base, previous: previous, progress: progress)
+            guard base.error == nil else {
+                DispatchQueue.main.async { finishLoad(generation, summary: nil) }
+                return
+            }
+            if let plugin {
+                let full = plugin.enrich(base, previous: previous, progress: progress)
                 HubPusher.shared.schedule(rawJson: built.json, models: full, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: full) }
             } else {
+                HubPusher.shared.schedule(rawJson: built.json, models: previous ?? base, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: nil) }
             }
-            #else
-            if base.error == nil {
-                HubPusher.shared.schedule(rawJson: built.json, models: previous ?? base, reason: "foreground")
-            }
-            DispatchQueue.main.async { finishLoad(generation, summary: nil) }
-            #endif
         }
     }
 
@@ -1039,8 +1032,8 @@ struct RootView: View {
                     }
                     .card(padding: 4)
 
-                    // on-device model failures (empty unless a torch model genuinely
-                    // failed — a missing bundle or an inference error, not just no data)
+                    // model failures that a plugin reports (empty without a plugin, and
+                    // empty when a model only has no data)
                     if !s.modelErrors.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             CardHeader(title: "On-Device Models", icon: "exclamationmark.triangle.fill", tint: Theme.caution)

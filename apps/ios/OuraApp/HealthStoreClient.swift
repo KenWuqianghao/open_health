@@ -6,6 +6,9 @@ import HealthKit
 protocol HealthStoreClient: AnyObject, Sendable {
     var isAvailable: Bool { get }
     func requestShare(_ types: Set<HKSampleType>) async throws
+    /// True when the user turned off writing `type` for this app in Health. HealthKit
+    /// answers every delete and save of such a type with "Not authorized".
+    func shareDenied(_ type: HKSampleType) -> Bool
     /// Delete our objects of `type` inside `window` (all of them when nil). Returns
     /// the number deleted. An empty window is not an error.
     func deleteOurObjects(of type: HKSampleType, in window: DateInterval?) async throws -> Int
@@ -21,6 +24,10 @@ final class HKStoreClient: HealthStoreClient, @unchecked Sendable {
 
     func requestShare(_ types: Set<HKSampleType>) async throws {
         try await store.requestAuthorization(toShare: types, read: [])
+    }
+
+    func shareDenied(_ type: HKSampleType) -> Bool {
+        store.authorizationStatus(for: type) == .sharingDenied
     }
 
     private func predicate(_ window: DateInterval?) -> NSPredicate {

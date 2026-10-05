@@ -31,8 +31,9 @@ xcrun -sdk iphonesimulator swiftc \
     "$APPDIR/PairedRing.swift" "$APPDIR/RingPairing.swift" "$APPDIR/Pairing.swift" "$APPDIR/ProfileSettings.swift" \
     "$APPDIR/ModelProgress.swift" "$APPDIR/Diagnostics.swift" \
     "$APPDIR/HealthModels.swift" "$APPDIR/HealthPlanner.swift" "$APPDIR/HealthExportState.swift" \
-    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" "$BUILD/CrashCatch.o" \
-    -L "$XCF" -loura_core \
+    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" \
+    "$APPDIR/Units.swift" "$APPDIR/Insights.swift" "$APPDIR/InsightViews.swift" "$APPDIR/Journal.swift" "$APPDIR/Workouts.swift" "$APPDIR/LiveHeart.swift" "$APPDIR/RingScreen.swift" "$APPDIR/DataTools.swift" "$APPDIR/HealthImport.swift" "$APPDIR/Notifier.swift" "$APPDIR/Snapshot.swift" "$APPDIR/SnapshotWriter.swift" "$APPDIR/AppIntents.swift" "$APPDIR/HubPush.swift" "$APPDIR/HealthReader.swift" "$APPDIR/HealthCatalog.swift" "$APPDIR/HealthBackground.swift" "$APPDIR/EventStore.swift" "$BUILD/CrashCatch.o" \
+    -L "$XCF" -loura_core -lsqlite3 \
     -o "$APP/OuraApp"
 # Xcode expands $(PRODUCT_BUNDLE_IDENTIFIER) at build time; the raw-swiftc path doesn't,
 # so substitute it here or LaunchServices registers the app under the literal variable

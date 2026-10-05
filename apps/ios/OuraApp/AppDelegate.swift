@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             Task { await SyncCoordinator.shared.handleUnsolicitedConnect(peripheral) }
         }
         AppHooks.install()
+        Notifier.shared.install()
         // Must run before launch finishes: iOS refuses later registrations, and a
         // HealthKit wake needs its observers in place.
         BGSync.register()

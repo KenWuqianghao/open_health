@@ -11,7 +11,10 @@ final class FakeHealthStore: HealthStoreClient, @unchecked Sendable {
     var failNextSave: Error?
     var lockedUntilReset = false
 
+    var deniedIdentifiers: Set<String> = []
+
     func requestShare(_ types: Set<HKSampleType>) async throws {}
+    func shareDenied(_ type: HKSampleType) -> Bool { deniedIdentifiers.contains(type.identifier) }
     func deleteOurObjects(of type: HKSampleType, in window: DateInterval?) async throws -> Int {
         if lockedUntilReset {
             throw NSError(domain: HKError.errorDomain, code: HKError.Code.errorDatabaseInaccessible.rawValue)
@@ -90,6 +93,27 @@ final class HealthExportEngineTests: XCTestCase {
         // the finalized day moved behind the cursor
         XCTAssertEqual(HealthExportStateStore.load().exportThroughYmd, "2026-01-01")
         XCTAssertNil(HealthExportStateStore.load().days["2026-01-01"])
+    }
+
+    func testATypeTurnedOffInHealthIsSkippedAndTheDayStillExports() async {
+        let store = FakeHealthStore()
+        store.deniedIdentifiers = [HKQuantityTypeIdentifier.stepCount.rawValue]
+        let out = await engine(store).run(.sync, envelope: envelope([day("2026-01-01", offsetDays: 0, finalized: true, fp: "a")]),
+                                          summary: nil, includeBasal: false, epoch: "e") { _ in }
+        XCTAssertEqual(out.daysWritten, 1)
+        XCTAssertNil(out.error)
+        XCTAssertFalse(store.deletes.contains { $0.0 == HKQuantityTypeIdentifier.stepCount.rawValue })
+        XCTAssertFalse(store.saved.joined().contains { ($0 as? HKSample)?.sampleType.identifier == HKQuantityTypeIdentifier.stepCount.rawValue })
+    }
+
+    func testEveryTypeTurnedOffFailsTheDayWithTheWayToFixIt() async {
+        let store = FakeHealthStore()
+        store.deniedIdentifiers = Set(HealthExportEngine.shareTypes.map(\.identifier))
+        let out = await engine(store).run(.sync, envelope: envelope([day("2026-01-01", offsetDays: 0, finalized: true, fp: "a")]),
+                                          summary: nil, includeBasal: false, epoch: "e") { _ in }
+        XCTAssertEqual(out.daysWritten, 0)
+        XCTAssertTrue(out.error?.contains("Turn On All") ?? false)
+        XCTAssertTrue(store.deletes.isEmpty)
     }
 
     func testCursorAdvancesOnlyOverTheContiguousFinalizedPrefix() async {

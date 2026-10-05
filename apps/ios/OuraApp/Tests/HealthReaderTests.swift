@@ -36,6 +36,24 @@ final class FakeHealthReadClient: HealthReadClient, @unchecked Sendable {
 }
 
 final class HealthReaderTests: XCTestCase {
+    func testTheCatalogAddsEveryTypeAndKeepsTheNamedKinds() {
+        let all = HealthReadTypes.all
+        XCTAssertGreaterThan(all.count, 150)
+        XCTAssertEqual(Set(all.map(\.kind)).count, all.count, "kinds are unique")
+        XCTAssertEqual(Set(all.map { $0.sampleType.identifier }).count, all.count, "no type twice")
+        // The kinds the hub tools name keep their names and units.
+        XCTAssertEqual(Array(all.prefix(HealthReadTypes.wake.count)).map(\.kind), HealthReadTypes.wake.map(\.kind))
+        func unit(_ kind: String) -> String? { all.first { $0.kind == kind }?.unitLabel }
+        XCTAssertEqual(unit("body_mass"), "kg")
+        XCTAssertEqual(unit("body_mass_index"), "count")
+        XCTAssertEqual(unit("blood_pressure_systolic"), "mmHg")
+        XCTAssertEqual(unit("dietary_protein"), "g")
+        XCTAssertEqual(unit("blood_glucose"), "mg/dL")
+        XCTAssertEqual(unit("time_in_daylight"), "s")
+        XCTAssertNotNil(all.first { $0.kind == "mindful_session" })
+        XCTAssertEqual(HealthReadTypes.kind("HKQuantityTypeIdentifierVO2Max", prefix: "HKQuantityTypeIdentifier"), "vo2_max")
+    }
+
     private let hr = HealthReadTypes.all.first { $0.kind == "heart_rate" }!
     private let steps = HealthReadTypes.all.first { $0.kind == "step_count" }!
     private let sleep = HealthReadTypes.all.first { $0.kind == "sleep_analysis" }!

@@ -5,6 +5,18 @@ decrypted locally (into the gitignored `notes/models/`), several of them run on
 the signals we already sync into `oura.db`. This page indexes the runners and what
 each can and can't do.
 
+## Without the models
+
+A build without the decrypted models still works. `oura-summary` uses these in
+their place:
+
+| result | without the model | where |
+| --- | --- | --- |
+| hypnogram | the ring's own pages (`0x5a`), with deep sleep; the ring scores sleeps of about 2 hours or more (`nights[].stage_source: ring`) | `ring_hypnograms` |
+| Symptom Radar | rule-based check of four signs, plus NightSignal on the resting heart rate | open_oura `insights::{illness,nightsignal}` |
+| activity sessions | bouts of MET minutes (`workouts[].source: ring_met`) | `extras::met_workouts` |
+| cardiovascular age | none; VO₂max from a formula or Apple Health | `fitness` |
+
 ## Tools
 
 | tool | model(s) | output | status |

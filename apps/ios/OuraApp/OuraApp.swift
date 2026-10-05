@@ -39,7 +39,7 @@ struct SleepCard: View {
                         Hypnogram(stages: n.stages!, height: 34).padding(.top, 2)
                     }
                     if n.hasHypnogram {
-                        let stages = [(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)]
+                        let stages = n.stageShares
                         let item = { (code: Int, pct: Double?) in
                             HStack(spacing: 4) {
                                 Circle().fill(Theme.stage(code)).frame(width: 7, height: 7)
@@ -96,12 +96,10 @@ struct ActivityCard: View {
                 if profile.count > 1 {
                     MovementRidge(profile: profile, height: 40)
                 }
-                let ws = s.workoutsOn(day).prefix(2)
+                let ws = s.mergedWorkouts(on: day).suffix(2)
                 if !ws.isEmpty {
                     Divider()
-                    ForEach(Array(ws)) { w in
-                        SessionRow(label: w.label, durationMin: w.durationMin, startHM: w.startHM)
-                    }
+                    ForEach(Array(ws)) { w in WorkoutRow(w: w) }
                 }
             }
             .card()
@@ -140,6 +138,95 @@ struct HighlightsCard: View {
             .animation(Motion.settle, value: status == nil)
             .animation(Motion.snappy, value: digest)
         }
+    }
+}
+
+/// A row of the Browse card.
+struct BrowseRow: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let detail: String?
+    let route: Route
+    var body: some View {
+        NavigationLink(value: route) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(tint)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+                Text(title).font(.body).foregroundStyle(.primary)
+                Spacer()
+                if let detail { Text(detail).foregroundStyle(.secondary).monospacedDigit() }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityIdentifier("browse-\(title)")
+    }
+}
+
+/// The newest complete week in one line; opens the report.
+struct ReportTeaser: View {
+    let report: PeriodReport
+    var body: some View {
+        NavigationLink(value: Route.periodReport(report.id)) {
+            VStack(alignment: .leading, spacing: 8) {
+                CardHeader(title: "Weekly Report", icon: "doc.text.fill", tint: .accentColor,
+                           detail: report.title, chevron: true)
+                if let line = report.highlights.first {
+                    Text(line).font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .card()
+        }
+        .buttonStyle(.pressable)
+    }
+}
+
+/// Says that rest mode is on, on the day's section.
+struct RestModeBanner: View {
+    var body: some View {
+        Label("Rest mode is on. Activity is not scored, and it does not count for your readiness.",
+              systemImage: "leaf.fill")
+            .font(.subheadline)
+            .foregroundStyle(Theme.good)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card(padding: 12)
+    }
+}
+
+/// The tile that starts a live heart rate reading.
+struct LiveCell: View {
+    let onPick: (LiveMode) -> Void
+    var body: some View {
+        Menu {
+            ForEach(LiveMode.allCases) { mode in
+                Button { onPick(mode) } label: {
+                    Label(mode.title, systemImage: mode.icon)
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                CardHeader(title: "Live", icon: "dot.radiowaves.up.forward", tint: Theme.heart)
+                Text("Measure Now").font(.title3.weight(.semibold)).foregroundStyle(.primary)
+                Text("Heart rate, a workout, or a breathing session")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .card(fillHeight: true)
+        }
+        // a menu tints its label; this label is a card like the ones beside it
+        .tint(.primary)
+        .accessibilityIdentifier("live-cell")
     }
 }
 
@@ -575,6 +662,11 @@ struct RootView: View {
         if diff > 0.05 { return "\(a) yr older" }
         return "In line"
     }
+    /// "+0.4 br/min vs baseline", or nil when the change is too small to name.
+    private func deltaText(_ delta: Double?, unit: String) -> String? {
+        guard let delta, abs(delta) >= 0.3 else { return nil }
+        return "\(delta > 0 ? "+" : "−")\(Fmt.number(abs(delta), decimals: 1)) \(unit) vs baseline"
+    }
     private func latestLabel(date: String?, time: String? = nil) -> String {
         let day = date.map { Fmt.monthDay($0) }
         let stamp = [day, time].compactMap { $0 }.joined(separator: ", ")
@@ -618,6 +710,31 @@ struct RootView: View {
                     case .allDays: AllDaysView(s: s)
                     case .sleepDebt:
                         if let debt = s.sleepDebt { SleepDebtDetail(debt: debt).zoomDestination(route, in: zoom) }
+                    case .stress:
+                        if let stress = s.stress?.value {
+                            StressDetailView(stress: stress, resilience: s.resilience?.value)
+                                .zoomDestination(route, in: zoom)
+                        }
+                    case .guidance:
+                        if let guidance = s.guidance?.value {
+                            GuidanceView(s: s, guidance: guidance).zoomDestination(route, in: zoom)
+                        }
+                    case .reports:
+                        ReportsView(reports: s.reports?.value ?? Reports())
+                    case .periodReport(let id):
+                        if let report = s.reports?.value?.report(id) { PeriodReportView(report: report) }
+                    case .tags(let day): TagsView(day: day, onChanged: refreshDerivedData)
+                    case .insights: TagInsightsView(s: s)
+                    case .cycle: CycleView(s: s, onChanged: refreshDerivedData)
+                    case .workouts: WorkoutsView(s: s, onChanged: refreshDerivedData)
+                    case .workout(let id):
+                        if let w = s.mergedWorkouts.first(where: { $0.id == id }) {
+                            WorkoutDetailView(w: w, onChanged: refreshDerivedData)
+                        }
+                    case .live(let mode):
+                        LiveHeartView(mode: mode, profile: s.profile, onSaved: refreshDerivedData)
+                    case .ring:
+                        RingView(s: s, onChanged: refreshDerivedData, onSync: { showSync = true })
                     }
                 }
             }
@@ -630,18 +747,23 @@ struct RootView: View {
         .fullScreenCover(isPresented: $showPairing) {
             PairingView(onPaired: { refreshAfterSync($0) })
         }
-        .sheet(isPresented: $showProfile) { ProfileSettingsView(profile: s?.profile, onSaved: refreshDerivedData) }
+        .sheet(isPresented: $showProfile) {
+            ProfileSettingsView(profile: s?.profile, summary: s, onSaved: refreshDerivedData)
+        }
         .onAppear {
             // A cached summary makes launch immediate; this forced load replaces it
             // with SQLite + model output without blanking the existing cards.
             load(force: true, clearCurrent: false)
             requestAutomaticSync()
+            importFromHealth()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 IdleTimerLock.refreshIfHeld("models")
                 requestAutomaticSync()
                 HealthExporter.shared.schedule(.foreground)
+                Task { await HealthReader.shared.requestNewTypesIfNeeded() }
+                importFromHealth()
             }
         }
         // A sync that completed elsewhere (background, restore wake) refreshes the
@@ -683,6 +805,20 @@ struct RootView: View {
         Task { _ = await ring.syncAutomaticallyIfNeeded() }
     }
 
+    /// New workouts or a new VO2 max in Apple Health change the summary.
+    private func importFromHealth() {
+        Task {
+            if await HealthImport.shared.run() { load(force: true, clearCurrent: false) }
+        }
+    }
+
+    /// A summary is on the screen: the widgets and the notifications follow it.
+    private func published(_ summary: Summary) {
+        guard summary.error == nil else { return }
+        SnapshotWriter.publish(summary)
+        Notifier.shared.evaluate(summary)
+    }
+
     // The heavy on-device models run off the main thread (load): show the fast
     // model-free summary first, then fold in the hypnogram / CVA / activity results.
     // Keep the screen awake for the whole pass so auto-lock cannot kill a long
@@ -714,6 +850,9 @@ struct RootView: View {
                     s = base
                     SummaryCache.save(base)
                     HealthExporter.shared.schedule(.sync, summary: base)
+                    #if !TORCH
+                    published(base)
+                    #endif
                 }
             }
             #if TORCH
@@ -739,6 +878,7 @@ struct RootView: View {
                 s = summary
                 SummaryCache.save(summary)
                 HealthExporter.shared.schedule(.modelsUpdated, summary: summary)
+                published(summary)
             }
             isRefreshingSummary = false
             modelProgress.report(generation, nil)
@@ -760,10 +900,14 @@ struct RootView: View {
                 }
             }
         } else {
-            let latestTemp = s.nights.first { $0.skin_temp != nil }
-            let latestOxygen = s.nights.first { $0.spo2_mean != nil }
-            let recentTemperatures = Array(s.nights.compactMap(\.skin_temp).prefix(14).reversed())
-            let recentOxygen = Array(s.nights.compactMap(\.spo2_mean).prefix(14).reversed())
+            let main = s.nights.filter { !$0.isNap }
+            let latestTemp = main.first { $0.temp_dev != nil }
+            let latestOxygen = main.first { $0.spo2_mean != nil }
+            let latestBreath = main.first { $0.breath != nil }
+            let recentOxygen = Array(main.compactMap(\.spo2_mean).prefix(14).reversed())
+            let recentBreath = Array(main.compactMap(\.breath).prefix(14).reversed())
+            let recentTemp = Array(main.compactMap(\.temp_dev).prefix(14).reversed())
+                .map { Units.current.temperatureDelta($0) }
             let latestHR = s.vitals.hr
             let columns = typeSize.isAccessibilitySize
                 ? [GridItem(.flexible())]
@@ -781,9 +925,13 @@ struct RootView: View {
                     // the hero of the home; tap either card for its report.
                     if let day = s.days.first {
                         SectionTitle(Fmt.dayLabel(day)).entrance(1)
+                        if s.restMode?.value?.on == true {
+                            RestModeBanner().entrance(1)
+                        }
                         ScoresCard(s: s, day: day).entrance(2)
                         SleepCard(s: s, day: day).entrance(3)
                         ActivityCard(s: s, day: day).entrance(4)
+                        DayTagsRow(s: s, day: day).entrance(4)
                     }
 
                     SectionTitle("Vitals").entrance(5)
@@ -797,31 +945,49 @@ struct RootView: View {
                                   baseline: s.vitals.rhr.baseline,
                                   detail: latestHR.map { latestLabel(date: $0.date, time: $0.hm) }
                                       ?? "Nightly minimum")
-                        VitalCell(kind: .temp,
-                                  value: latestTemp?.skin_temp.map { String(format: "%.1f", $0) } ?? "—",
-                                  series: recentTemperatures,
-                                  detail: latestTemp.map { latestLabel(date: s.wakeYmd($0)) })
+                        VitalCell(kind: .breath,
+                                  value: latestBreath?.breath.map { VitalKind.breath.format($0) } ?? "—",
+                                  series: recentBreath,
+                                  baseline: s.vitals.breath?.baseline,
+                                  detail: deltaText(s.vitals.breath?.delta, unit: "br/min")
+                                      ?? latestBreath.map { latestLabel(date: s.wakeYmd($0)) })
                         VitalCell(kind: .oxygen, value: f(latestOxygen?.spo2_mean),
                                   series: recentOxygen,
+                                  baseline: s.vitals.spo2?.baseline,
                                   detail: latestOxygen.map { latestLabel(date: s.wakeYmd($0)) })
+                        VitalCell(kind: .temp,
+                                  value: latestTemp?.temp_dev.map { VitalKind.temp.format(Units.current.temperatureDelta($0)) } ?? "—",
+                                  series: recentTemp,
+                                  baseline: 0,
+                                  detail: latestTemp?.skin_temp.map { "\(Fmt.temperature($0)) last night" }
+                                      ?? "From your baseline")
+                        LiveCell { path.append(Route.live($0)) }
                     }
                     .entrance(6)
 
                     SectionTitle("Trends")
                     TrendsCard(s: s)
-
-                    if s.sleepDebt != nil || s.illness != nil {
-                        SectionTitle("Recovery")
+                    if let week = s.reports?.value?.weeks.first(where: \.complete) ?? s.reports?.value?.weeks.first {
+                        ReportTeaser(report: week)
                     }
+
+                    SectionTitle("Recovery")
                     if let debt = s.sleepDebt {
                         SleepDebtCard(debt: debt)
                     }
-                    if let illness = s.illness {
-                        IllnessCard(illness: illness)
+                    if let illness = s.shownIllness {
+                        IllnessCard(illness: illness.result, fromRules: illness.fromRules,
+                                    nightSignal: s.nightSignal)
+                    }
+                    if let stress = s.stress?.value, stress.latest != nil {
+                        StressCard(stress: stress, resilience: s.resilience?.value)
+                    }
+                    if let guidance = s.guidance?.value, guidance.bedtime != nil || guidance.regularity != nil {
+                        GuidanceCard(guidance: guidance)
                     }
 
                     // Cardiovascular estimates belong together: vascular age/PWV
-                    // from raw PPG plus the demographic VO₂max estimate.
+                    // from raw PPG plus VO₂ max (measured, or from the profile).
                     if s.cardio?.vascular_age != nil || s.fitness?.vo2max != nil {
                         SectionTitle("Cardiovascular")
                         VStack(alignment: .leading, spacing: 10) {
@@ -840,27 +1006,38 @@ struct RootView: View {
                             if let vo = s.fitness?.vo2max {
                                 if s.cardio?.vascular_age != nil { Divider() }
                                 StatRow(label: "Cardio fitness (VO₂ max)", value: String(format: "%.0f", vo))
+                                Text(s.fitness?.source == "measured"
+                                     ? "Measured by \(s.fitness?.source_name ?? "Apple Health")\(s.fitness?.date.map { ", \(Fmt.monthDay($0))" } ?? "")"
+                                     : "An estimate from your age, sex and weight")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .card()
                     }
 
-                    // browse every day → per-day detail (sleep + activity)
-                    if !s.days.isEmpty {
-                        NavigationLink(value: Route.allDays) {
-                            HStack {
-                                Label("Show All Days", systemImage: "calendar")
-                                    .font(.body.weight(.medium))
-                                Spacer()
-                                Text("\(s.days.count)").foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .card()
+                    // everything else, one row each
+                    SectionTitle("Browse")
+                    VStack(spacing: 0) {
+                        if !s.days.isEmpty {
+                            BrowseRow(title: "All Days", icon: "calendar", tint: .accentColor,
+                                      detail: "\(s.days.count)", route: .allDays)
+                            Divider().padding(.leading, 44)
                         }
-                        .buttonStyle(.pressable)
+                        BrowseRow(title: "Workouts", icon: "figure.run", tint: Theme.activity,
+                                  detail: s.mergedWorkouts.isEmpty ? nil : "\(s.mergedWorkouts.count)", route: .workouts)
+                        Divider().padding(.leading, 44)
+                        BrowseRow(title: "Tags and Insights", icon: "tag.fill", tint: Theme.journal,
+                                  detail: nil, route: .insights)
+                        Divider().padding(.leading, 44)
+                        BrowseRow(title: "Reports", icon: "doc.text.fill", tint: .accentColor,
+                                  detail: nil, route: .reports)
+                        if s.cycle?.value != nil || s.profile?.sex == "F" {
+                            Divider().padding(.leading, 44)
+                            BrowseRow(title: "Cycle", icon: "circle.dotted.circle", tint: Theme.cardio,
+                                      detail: s.cycle?.value.map { "Day \($0.cycle_day)" }, route: .cycle)
+                        }
                     }
+                    .card(padding: 4)
 
                     // on-device model failures (empty unless a torch model genuinely
                     // failed — a missing bundle or an inference error, not just no data)
@@ -874,30 +1051,35 @@ struct RootView: View {
                         .card()
                     }
 
-                    // device & data health
+                    // the ring: battery and the last sync; the page has the rest
                     SectionTitle("Ring")
-                    VStack(spacing: 10) {
-                        CardHeader(title: "Device", icon: "circle.circle", tint: Theme.device,
-                                   detail: s.device?.firmware.map { "Firmware \($0)" })
-                        if let b = s.device?.battery_pct {
-                            HStack(spacing: 12) {
-                                Image(systemName: b < 20 ? "battery.25percent" : (b < 60 ? "battery.50percent" : "battery.100percent"))
-                                    .font(.title2)
-                                    .foregroundStyle(b < 20 ? Theme.alert : Theme.good)
-                                    .accessibilityHidden(true)
-                                BigValue("\(b)", "%", style: .title2)
-                                Spacer()
+                    NavigationLink(value: Route.ring) {
+                        VStack(spacing: 10) {
+                            CardHeader(title: "Device", icon: "circle.circle", tint: Theme.device,
+                                       detail: s.device?.firmware.map { "Firmware \($0)" }, chevron: true)
+                            if let b = s.device?.battery_pct {
+                                HStack(spacing: 12) {
+                                    Image(systemName: b < 20 ? "battery.25percent" : (b < 60 ? "battery.50percent" : "battery.100percent"))
+                                        .font(.title2)
+                                        .foregroundStyle(b < 20 ? Theme.alert : Theme.good)
+                                        .accessibilityHidden(true)
+                                    BigValue("\(b)", "%", style: .title2)
+                                    Spacer()
+                                    if let text = batteryDetail(s.device?.battery?.value) {
+                                        Text(text).font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                }
                             }
+                            Divider()
+                            StatRow(label: "Last sync",
+                                    value: s.device.flatMap { d in d.synced.map { "\(Fmt.monthDay($0)) \(d.synced_hm ?? "")" } } ?? "—")
+                            StatRow(label: "Days of data",
+                                    value: s.device?.days_of_data.map { String(format: "%.0f", $0) } ?? "—")
                         }
-                        Divider()
-                        StatRow(label: "Serial", value: s.device?.serial ?? "—")
-                        StatRow(label: "Last sync",
-                                value: s.device.flatMap { d in d.synced.map { "\(Fmt.monthDay($0)) \(d.synced_hm ?? "")" } } ?? "—")
-                        StatRow(label: "Days of data",
-                                value: s.device?.days_of_data.map { String(format: "%.0f", $0) } ?? "—")
-                        StatRow(label: "Nights", value: "\(s.device?.nights ?? s.nights.count)")
+                        .card()
                     }
-                    .card()
+                    .buttonStyle(.pressable)
+                    .accessibilityIdentifier("ring-card")
                 }
                 .padding(.horizontal, Theme.gutter)
                 .padding(.bottom, 32)

@@ -46,7 +46,8 @@ xcrun -sdk iphonesimulator swiftc \
     "$APPDIR/SleepStaging.swift" "$APPDIR/CvaModel.swift" "$APPDIR/ActivityModel.swift" "$APPDIR/IllnessModel.swift" \
     "$APPDIR/Diagnostics.swift" \
     "$APPDIR/HealthModels.swift" "$APPDIR/HealthPlanner.swift" "$APPDIR/HealthExportState.swift" \
-    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" "$BUILD/TorchBridge.o" "$BUILD/CrashCatch.o" \
+    "$APPDIR/HealthStoreClient.swift" "$APPDIR/HealthExporter.swift" \
+    "$APPDIR/Units.swift" "$APPDIR/Insights.swift" "$APPDIR/InsightViews.swift" "$APPDIR/Journal.swift" "$APPDIR/Workouts.swift" "$APPDIR/LiveHeart.swift" "$APPDIR/RingScreen.swift" "$APPDIR/DataTools.swift" "$APPDIR/HealthImport.swift" "$APPDIR/Notifier.swift" "$APPDIR/Snapshot.swift" "$APPDIR/SnapshotWriter.swift" "$APPDIR/AppIntents.swift" "$APPDIR/HubPush.swift" "$APPDIR/HealthReader.swift" "$APPDIR/HealthCatalog.swift" "$APPDIR/HealthBackground.swift" "$BUILD/TorchBridge.o" "$BUILD/CrashCatch.o" \
     -L "$XCF" -loura_core \
     -lc++ -lsqlite3 \
     -L "$LT/lib" -ltorch -ltorch_cpu -lc10 \

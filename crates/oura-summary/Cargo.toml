@@ -10,5 +10,6 @@ repository.workspace = true
 oura-protocol = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
 oura-store = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
 oura-analysis = { git = "https://github.com/KenWuqianghao/open_oura", rev = "9ccde5e351981f7c05f15e2032cbfa106ed14fcb" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

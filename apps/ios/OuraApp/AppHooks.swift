@@ -20,7 +20,8 @@ enum AppHooks {
     private static func afterSync(trigger: SyncTrigger, report: SyncReport?, policy: SyncPolicy) async {
         // 1. File protection: the DB must stay readable after the first unlock so a
         //    background sync on a locked phone can write to it.
-        for name in ["oura.db", "oura.db-wal", "oura.db-shm", "summary-cache.json", "health-export-state.json", "health-read-state.json"] {
+        for name in ["oura.db", "oura.db-wal", "oura.db-shm", "summary-cache.json", "health-export-state.json",
+                     "health-read-state.json", "journal.json", "external.json", "profile.json", "feature_modes.json"] {
             let url = DB.url.deletingLastPathComponent().appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             try? FileManager.default.setAttributes(
@@ -39,6 +40,8 @@ enum AppHooks {
         // The last summary that carries model results, for the hub push below.
         let previousFull = SummaryCache.load()
         if policy.refreshSummary {
+            // Workouts from Apple Health go into the summary, so read them first.
+            if trigger != .bgRefresh { await HealthImport.shared.run() }
             let started = Date()
             let built = Core.baseWithJson()
             SyncSettings.lastSummaryBuildSeconds = Date().timeIntervalSince(started)
@@ -48,6 +51,14 @@ enum AppHooks {
                 rawJson = built.json
             }
             dlog("hooks", "summary rebuilt in \(String(format: "%.1f", SyncSettings.lastSummaryBuildSeconds))s")
+            // The widgets and the notifications follow every new summary. In the
+            // torch build the models add the Symptom Radar; the scores are here now.
+            if let summary {
+                var shown = summary
+                shown.illness = previousFull?.illness
+                SnapshotWriter.publish(shown)
+                Notifier.shared.evaluate(shown)
+            }
         }
         // 3. Apple Health: only the recent tail; defers itself when the phone is locked.
         if policy.exportHealth {
@@ -64,6 +75,7 @@ enum AppHooks {
         if policy.runModels, trigger == .bgProcessing, let base = summary, modelGate() {
             let full = Core.withModels(base, previous: previousFull)
             SummaryCache.save(full)
+            Notifier.shared.evaluate(full)
             await HealthExporter.shared.run(.modelsUpdated, summary: full)
             if let rawJson {
                 await HubPusher.shared.pushSummary(rawJson: rawJson, models: full, reason: "models", timeout: 20)

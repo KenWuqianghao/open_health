@@ -49,9 +49,13 @@ running fully on-device on a real ring's data, sharing the Rust core so a web
 change in `build_summary()` flows to iOS with no re-implementation.
 
 ## Non-goals (v1)
-Cloud sync · accounts · Android · live realtime (`viz`/`game`) · trends screens ·
-widgets · Live Activities — all later. v1 is the offline dashboard, done beautifully,
+Cloud sync · accounts · Android · the desktop realtime tools (`viz`/`game`) ·
+Live Activities · a watchOS app. v1 is the offline dashboard, done beautifully,
 plus the OpenStrap-style essentials: on-device pairing, background sync, Apple Health.
+
+Built after v1 (see `docs/journal-and-insights.md`): trends, notifications, widgets,
+Siri, tags and correlations, reports, workouts from Apple Health, live heart rate,
+the ring page with feature switches and the finder, export and restore.
 
 ## Status (foundation built & verified on the iOS 26.4 simulator)
 - ✅ **`oura-core` UniFFI `.xcframework`** — `crates/oura-core` exposes `summary_json`/

@@ -69,6 +69,11 @@ final class BLETransport: NSObject, RingTransport, CBPeripheralDelegate, @unchec
     private var historyFrames = 0
     private var historyBytes = 0
     private static let historyFlushBytes = 32 * 1024
+    // A Gen3 link moves about 5 KB/s, so 32 KB takes about 6 s: as long as the quiet
+    // window of the Rust drain, which then sees no packet and reports a lost link.
+    // Also flush by age, so a slow stream reaches Rust in time.
+    private static let historyFlushAge: CFAbsoluteTime = 0.5
+    private var historyBufferedAt: CFAbsoluteTime = 0
 
     private var prepareCont: CheckedContinuation<Void, Error>?
     private var prepareTimer: DispatchWorkItem?
@@ -251,10 +256,12 @@ final class BLETransport: NSObject, RingTransport, CBPeripheralDelegate, @unchec
             return
         }
         if Self.isHistoryPayload(v) {
+            if historyBuffer.isEmpty { historyBufferedAt = CFAbsoluteTimeGetCurrent() }
             historyBuffer.append(v)
             historyFrames += 1
             historyBytes += v.count
-            if historyBuffer.count >= Self.historyFlushBytes {
+            if historyBuffer.count >= Self.historyFlushBytes
+                || CFAbsoluteTimeGetCurrent() - historyBufferedAt >= Self.historyFlushAge {
                 flushHistoryPayload()
             }
             return

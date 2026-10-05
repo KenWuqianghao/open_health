@@ -511,7 +511,20 @@ function renderIllness(d) {
     }
     box.append(list);
   }
-  box.append(el("div", "il-foot", `On-device illness model · ${ill.days_with_data} of 30 days · ${esc(ill.date)}`));
+  const ns = ill.nightsignal;
+  if (ns && ns.current) {
+    // NightSignal (Mishra 2022): two nights in a row of resting HR 3+ (yellow) or
+    // 4+ bpm (red) above the median of all earlier nights.
+    const cls = { red: "alert", yellow: "warn" }[ns.alert] || "ok";
+    const what = { red: "raised 4 bpm or more for two nights", yellow: "raised 3 bpm or more for two nights" }[ns.alert]
+      || "no sustained rise";
+    box.append(el("div", `il-status il-${cls} il-ns`,
+      `<span class="il-dot"></span><span>Resting heart rate ${ns.rhr} bpm, usual ${ns.baseline}: ${what}</span>`));
+  }
+  const basis = ill.basis === "rules" ? `Rule-based check · ${ill.days_with_data} of 28 days`
+    : `On-device illness model · ${ill.days_with_data} of 30 days`;
+  box.append(el("div", "il-foot", `${basis} · ${esc(ill.date)}` +
+    (ns && ns.current ? " · resting HR: NightSignal" : "")));
 }
 
 function renderCardio(d) {

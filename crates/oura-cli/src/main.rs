@@ -181,6 +181,42 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Write a demo database (no ring needed): days of plausible data that end
+    /// now, with a journal and Apple Health workouts next to it. Use it with
+    /// `--db <file> dashboard` to try the dashboard.
+    DemoDb {
+        /// The database file to write. It must not exist.
+        out: PathBuf,
+        #[arg(long, default_value_t = 45)]
+        days: u32,
+        /// Timezone offset (hours from UTC) of the demo wearer.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+    },
+    /// Print the summary JSON that the dashboard and the iOS app show (offline,
+    /// without the torch models).
+    Summary {
+        /// Timezone offset (hours from UTC) for day boundaries.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+    },
+    /// Export the data (offline): `csv` is one row per day with every metric,
+    /// `json` is the full summary. Writes to `--out` or to standard output.
+    Export {
+        #[arg(long, default_value = "csv", value_parser = ["csv", "json"])]
+        format: String,
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Change the journal next to the database (tags, workouts, period days, rest
+    /// mode) with one JSON operation, for example
+    /// `'{"op":"add_tag","day":"2026-09-27","tag":"alcohol"}'`. Without an
+    /// operation, prints the journal.
+    Journal {
+        op: Option<String>,
+    },
     /// Subscribe a feature capability (real_steps | atlas | ambient | raw_data |
     /// research_data) via SetFeatureSubscription, to make the ring emit its events.
     Subscribe {
@@ -400,6 +436,60 @@ async fn main() -> Result<()> {
         } => cmd_sleep_score(&cli, *tz_offset, csv.clone(), *json),
         Command::ReadinessScore { tz_offset, json } => cmd_readiness_score(&cli, *tz_offset, *json),
         Command::HealthSamples { tz_offset, day, json } => cmd_health_samples(&cli, *tz_offset, day.as_deref(), *json),
+        Command::DemoDb { out, days, tz_offset } => {
+            if out.exists() {
+                return Err(anyhow!("{} exists already", out.display()));
+            }
+            let end_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let report = oura_summary::demo::write_demo(
+                out,
+                &oura_summary::demo::DemoOptions { days: *days, end_unix, tz: *tz_offset, seed: 7 },
+            )?;
+            println!(
+                "wrote {}: {} days, {} sleep periods, {} events",
+                out.display(), report.days, report.nights, report.events
+            );
+            Ok(())
+        }
+        Command::Summary { tz_offset } => {
+            let v = oura_summary::build_summary(&cli.db, *tz_offset, &oura_summary::NoModelRunner)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        Command::Export { format, tz_offset, out } => {
+            let runner = oura_summary::NoModelRunner;
+            let text = match format.as_str() {
+                "json" => serde_json::to_string_pretty(&oura_summary::build_summary(
+                    &cli.db, *tz_offset, &runner,
+                )?)?,
+                _ => oura_summary::export_daily_csv(&cli.db, *tz_offset, &runner)?,
+            };
+            match out {
+                Some(path) => {
+                    std::fs::write(path, text)?;
+                    println!("wrote {}", path.display());
+                }
+                None => print!("{text}"),
+            }
+            Ok(())
+        }
+        Command::Journal { op } => {
+            let journal = match op {
+                Some(op) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    oura_summary::journal::apply(&cli.db, &serde_json::from_str(op)?, now)?
+                }
+                None => oura_summary::journal::read_journal(&cli.db),
+            };
+            println!("{}", serde_json::to_string_pretty(&journal)?);
+            Ok(())
+        }
         Command::Subscribe { feature, mode } => cmd_subscribe(&cli, &key, feature, mode).await,
         Command::FeatureMode { feature, mode } => cmd_feature_mode(&cli, &key, feature, mode).await,
         Command::FeatureStatus => cmd_feature_status(&cli, &key).await,

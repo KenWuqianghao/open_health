@@ -76,8 +76,10 @@ the phone with the cable and tap "Trust" when the phone asks.
 ### With Xcode
 
 1. Open `OuraApp.xcodeproj`.
-2. Select the `OuraApp` target → Signing & Capabilities. Pick your Team. Change the
-   bundle identifier to one you own, for example `com.yourname.openoura`.
+2. Select the project → Build Settings. Set `APP_BUNDLE_ID` to an identifier you own,
+   for example `com.yourname.openoura`. The app, the widget extension
+   (`<id>.widgets`) and the App Group (`group.<id>`) follow it. Then pick your Team
+   for the `OuraApp` and the `OuraWidgets` targets under Signing & Capabilities.
 3. Select your iPhone as the run destination and press Run.
 
 ### From the command line
@@ -96,7 +98,7 @@ id (the UUID). Then:
 xcodebuild -project OuraApp.xcodeproj -scheme OuraApp \
   -destination 'platform=iOS,id=<hardware id>' -configuration Debug \
   -derivedDataPath build/DerivedData-device \
-  DEVELOPMENT_TEAM=<your team id> PRODUCT_BUNDLE_IDENTIFIER=com.yourname.openoura \
+  DEVELOPMENT_TEAM=<your team id> APP_BUNDLE_ID=com.yourname.openoura \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
 ```
 

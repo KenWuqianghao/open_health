@@ -1272,7 +1272,6 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oura-analysis"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=9ccde5e351981f7c05f15e2032cbfa106ed14fcb#9ccde5e351981f7c05f15e2032cbfa106ed14fcb"
 dependencies = [
  "oura-protocol",
  "serde",
@@ -1337,7 +1336,6 @@ dependencies = [
 [[package]]
 name = "oura-link"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=9ccde5e351981f7c05f15e2032cbfa106ed14fcb#9ccde5e351981f7c05f15e2032cbfa106ed14fcb"
 dependencies = [
  "async-trait",
  "btleplug",
@@ -1353,7 +1351,6 @@ dependencies = [
 [[package]]
 name = "oura-protocol"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=9ccde5e351981f7c05f15e2032cbfa106ed14fcb#9ccde5e351981f7c05f15e2032cbfa106ed14fcb"
 dependencies = [
  "aes",
  "hex",
@@ -1365,7 +1362,6 @@ dependencies = [
 [[package]]
 name = "oura-store"
 version = "0.1.0"
-source = "git+https://github.com/KenWuqianghao/open_oura?rev=9ccde5e351981f7c05f15e2032cbfa106ed14fcb#9ccde5e351981f7c05f15e2032cbfa106ed14fcb"
 dependencies = [
  "hex",
  "oura-protocol",
@@ -1383,6 +1379,7 @@ dependencies = [
  "oura-analysis",
  "oura-protocol",
  "oura-store",
+ "serde",
  "serde_json",
 ]
 

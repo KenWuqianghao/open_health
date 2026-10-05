@@ -15,6 +15,10 @@ enum Theme {
     static let hrv = Color.mint
     static let temperature = Color.purple
     static let oxygen = Color.cyan
+    static let breath = Color.blue
+    static let stress = Color.orange
+    static let resilience = Color.green
+    static let journal = Color.brown
     static let cardio = Color.pink
     static let device = Color.gray
 

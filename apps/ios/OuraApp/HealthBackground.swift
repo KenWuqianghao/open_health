@@ -94,13 +94,13 @@ final class HealthBackground {
     func start() async {
         let client = HealthReader.shared.client
         var failed: [String] = []
-        for t in HealthReadTypes.all {
+        for t in HealthReadTypes.wake {
             do { try await client.enableBackgroundDelivery(t.sampleType, frequency: Self.frequency(for: t.kind)) }
             catch { failed.append(t.kind) }
         }
         if !failed.isEmpty { dlog("health-read", "background delivery refused for \(failed.joined(separator: ","))") }
         startObservers(client)
-        dlog("health-read", "background delivery on, \(HealthReadTypes.all.count - failed.count) types")
+        dlog("health-read", "background delivery on, \(HealthReadTypes.wake.count - failed.count) types")
     }
 
     func stop() async {
@@ -113,7 +113,7 @@ final class HealthBackground {
         lock.lock(); defer { lock.unlock() }
         guard queries.isEmpty else { return }
         let wake = self.wake
-        queries = HealthReadTypes.all.map { t in
+        queries = HealthReadTypes.wake.map { t in
             client.observe(t.sampleType) { completion in
                 Task { await wake.wake(kind: t.kind, completion: completion) }
             }

@@ -133,6 +133,7 @@ enum Core {
         for i in s.nights.indices {
             guard let sds = s.nights[i].start_ds, let stages = staged[String(sds)], !stages.isEmpty else { continue }
             s.nights[i].stages = stages
+            s.nights[i].stage_source = "model"
             let total = Double(stages.count)
             let pct = { (code: Int) in (Double(stages.filter { $0 == code }.count) / total * 100).rounded() }
             s.nights[i].deep_pct = pct(1); s.nights[i].light_pct = pct(2)

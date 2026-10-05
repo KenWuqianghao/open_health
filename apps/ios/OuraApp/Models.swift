@@ -19,7 +19,20 @@ struct LatestVital: Codable {
     var hm: String?
     var at_unix: Int64?
 }
-struct Vitals: Codable { var hrv = Trend(); var rhr = Trend(); var hr: LatestVital? }
+/// A vital with decimals: breathing rate, blood oxygen, temperature deviation.
+/// `delta` is latest minus baseline, in the vital's own unit.
+struct ScaledTrend: Codable {
+    var series: [Double] = []
+    var latest: Double? = nil
+    var baseline: Double? = nil
+    var delta: Double? = nil
+}
+struct Vitals: Codable {
+    var hrv = Trend(); var rhr = Trend(); var hr: LatestVital?
+    var breath: ScaledTrend? = nil
+    var spo2: ScaledTrend? = nil
+    var temp_dev: ScaledTrend? = nil
+}
 // per-night raw signal series (from build_summary event accumulation — present in BOTH
 // the model-free and on-device builds; each covers the whole night so index→time is a
 // shared axis across lanes). Feeds the polysomnograph lanes.
@@ -42,9 +55,28 @@ struct NightRow: Codable, Identifiable {
     var deep_pct: Double?; var light_pct: Double?; var rem_pct: Double?
     var wake_pct: Double?; var efficiency: Double?
     var stages: [Int]? = nil
+    /// Who staged the night: "model" (Oura's SleepNet on the device) or "ring" (the
+    /// ring's own hypnogram).
+    var stage_source: String? = nil
     var series: NightSeries? = nil
+    /// Breaths per minute, the mean of the night.
+    var breath: Double? = nil
+    /// Skin temperature minus the mean of the 14 nights before, in °C.
+    var temp_dev: Double? = nil
+    /// "main" for the longest sleep of its wake day (3 hours or more), else "nap".
+    var kind: String? = nil
     var id: String { (date ?? "") + (start ?? "") }
     var hasHypnogram: Bool { (stages?.count ?? 0) > 1 }
+    /// The stages to list with their share.
+    var stageShares: [(Int, Double?)] { [(1, deep_pct), (2, light_pct), (3, rem_pct), (4, wake_pct)] }
+    var isNap: Bool { kind == "nap" }
+    /// Minutes in a stage (1 deep, 2 core, 3 REM, 4 awake) from the stage share, so
+    /// the value follows the on-device hypnogram when the models replaced it.
+    func stageMinutes(_ code: Int) -> Double? {
+        let pct: Double? = switch code { case 1: deep_pct; case 2: light_pct; case 3: rem_pct; default: wake_pct }
+        guard hasHypnogram, let pct, let h = in_bed_h else { return nil }
+        return (pct / 100 * h * 60).rounded()
+    }
 }
 struct DailyStat: Codable { var active_kcal: Double?; var total_kcal: Double?; var steps: Double?; var distance_m: Double? }
 struct Profile: Codable {
@@ -135,7 +167,13 @@ struct WorkoutSession: Identifiable, Codable {
     var startHM: String { String(start.suffix(5)) }        // HH:MM
 }
 struct Cardio: Codable { var vascular_age: Double?; var chronological_age: Double?; var pwv_ms: Double?; var segments: Int? }
-struct Fitness: Codable { var vo2max: Double? }
+struct Fitness: Codable {
+    var vo2max: Double?
+    /// "measured" (Apple Health) or "formula" (age, sex and weight).
+    var source: String? = nil
+    var source_name: String? = nil
+    var date: String? = nil
+}
 struct SleepDebtDay: Codable, Identifiable {
     var date: String
     var total_sleep_min: Double?
@@ -155,11 +193,34 @@ struct SleepDebtSummary: Codable {
     var state: String = "none"
     var days: [SleepDebtDay] = []
 }
+struct BatteryPoint: Codable, Identifiable {
+    var t: Double
+    var pct: Double
+    var id: Double { t }
+}
+struct BatteryInfo: Codable {
+    var latest: BatteryPoint?
+    var history: [BatteryPoint] = []
+    var charging: Bool = false
+    var rate_pct_per_day: Double? = nil
+    var days_left: Double? = nil
+}
 struct Device: Codable {
     var serial: String?; var firmware: String?
+    var hardware_id: String? = nil
     var battery_pct: Int?
+    var battery: Lenient<BatteryInfo>? = nil
     var days_of_data: Double?; var nights: Int?
     var synced: String?; var synced_hm: String?
+    var fresh_hours: Double? = nil
+    /// The measurement features and their last known state.
+    var measuring: Lenient<[MeasuringFeature]>? = nil
+}
+struct MeasuringFeature: Codable, Identifiable {
+    var name: String
+    var on: Bool
+    var feature: String
+    var id: String { feature }
 }
 // Symptom Radar (on-device illness detection). Mirrors the web summary's `illness`
 // block; computed on-device by IllnessModel so it isn't part of the FFI JSON.
@@ -195,6 +256,18 @@ struct Summary: Codable {
     var fitness: Fitness?
     var sleepDebt: SleepDebtSummary?
     var scores: Scores?
+    // Results on top of the core summary (oura-summary `extras.rs`). Each one is
+    // lenient: a section that does not decode is absent, the rest stays.
+    var entries: Lenient<[WorkoutEntry]>? = nil
+    var stress: Lenient<StressSummary>? = nil
+    var resilience: Lenient<ResilienceSummary>? = nil
+    var guidance: Lenient<Guidance>? = nil
+    var reports: Lenient<Reports>? = nil
+    var correlations: Lenient<Correlations>? = nil
+    var cycle: Lenient<CycleInfo>? = nil
+    var journal: Lenient<JournalData>? = nil
+    var restMode: Lenient<RestModeInfo>? = nil
+    var rulesIllness: Lenient<RulesIllness>? = nil
     var illness: IllnessResult?           // on-device only (Symptom Radar; not in the JSON)
     var workouts: [WorkoutSession] = []   // on-device only (not in the JSON)
     var modelErrors: [String] = []        // on-device model failures (not in the JSON)
@@ -203,7 +276,11 @@ struct Summary: Codable {
     // out of decoding.
     enum CodingKeys: String, CodingKey {
         case digest, device, nights, vitals, activity_profile, activity_daily, profile, cardio, fitness, error, scores
+        case stress, resilience, guidance, reports, correlations, cycle, journal
         case sleepDebt = "sleep_debt"
+        case entries = "workouts"
+        case restMode = "rest_mode"
+        case rulesIllness = "illness"
     }
     /// recent days (newest first) that have a movement profile.
     var activeDays: [String] { activity_profile.keys.sorted(by: >) }
@@ -270,12 +347,13 @@ struct DatedVital: Identifiable {
 }
 
 enum VitalKind: String, Identifiable, CaseIterable {
-    case hrv, heartRate, temp, oxygen
+    case hrv, heartRate, breath, oxygen, temp
     var id: String { rawValue }
     var title: String {
         switch self {
         case .hrv: return "HRV"
         case .heartRate: return "Heart Rate"
+        case .breath: return "Respiratory Rate"
         case .temp: return "Skin Temperature"
         case .oxygen: return "Blood Oxygen"
         }
@@ -285,6 +363,7 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return "HRV"
         case .heartRate: return "Heart Rate"
+        case .breath: return "Breathing"
         case .temp: return "Skin Temp"
         case .oxygen: return "Blood O₂"
         }
@@ -293,6 +372,7 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return "waveform.path.ecg"
         case .heartRate: return "heart.fill"
+        case .breath: return "wind"
         case .temp: return "thermometer.medium"
         case .oxygen: return "lungs.fill"
         }
@@ -301,6 +381,7 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return Theme.hrv
         case .heartRate: return Theme.heart
+        case .breath: return Theme.breath
         case .temp: return Theme.temperature
         case .oxygen: return Theme.oxygen
         }
@@ -309,15 +390,16 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return "ms"
         case .heartRate: return "bpm"
-        case .temp: return "°C"
+        case .breath: return "br/min"
+        case .temp: return Units.current.temperatureUnit
         case .oxygen: return "%"
         }
     }
     /// What fills the card, for the empty state.
     var emptyHint: String {
         switch self {
-        case .hrv, .heartRate: return "Measured while you sleep"
-        case .temp: return "Measured while you sleep"
+        case .hrv, .heartRate, .breath: return "Measured while you sleep"
+        case .temp: return "Needs three nights for a baseline"
         case .oxygen: return "Needs blood oxygen sensing on"
         }
     }
@@ -325,18 +407,24 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return "Heart rate variability during your main sleep: how much the time between heartbeats varies. Higher than your usual generally means your body has recovered well."
         case .heartRate: return "Your lowest heart rate while asleep. A resting heart rate below your usual is a good sign; one above it can mean stress, alcohol, a late meal, or an illness coming on."
-        case .temp: return "Your skin temperature while asleep. Small changes are normal; a jump of half a degree or more can come with illness or your cycle."
+        case .breath: return "How many breaths you take each minute while asleep. It is steady from night to night for most people. A rise of one breath or more can come with an illness, alcohol, or a hard training day."
+        case .temp: return "How far your skin temperature while asleep is from your own average of the 14 nights before. Small changes are normal; a rise of half a degree Celsius or more can come with illness or your cycle."
         case .oxygen: return "Your average blood oxygen while asleep. Most healthy readings sit between 95 and 100 percent."
         }
     }
     var decimals: Int {
-        switch self { case .temp: return 1; default: return 0 }
+        switch self { case .temp, .breath: return 1; default: return 0 }
     }
+    /// The value is a difference from the baseline and shows its sign.
+    var signed: Bool { self == .temp }
     func series(in s: Summary) -> [DatedVital] {
         switch self {
         case .hrv: return s.nightlySeries(\.hrv_ms)
         case .heartRate: return s.nightlySeries(\.rhr)
-        case .temp: return s.nightlySeries(\.skin_temp)
+        case .breath: return s.nightlySeries(\.breath)
+        case .temp:
+            return s.nightlySeries(\.temp_dev)
+                .map { DatedVital(date: $0.date, value: Units.current.temperatureDelta($0.value)) }
         case .oxygen: return s.nightlySeries(\.spo2_mean)
         }
     }
@@ -344,14 +432,20 @@ enum VitalKind: String, Identifiable, CaseIterable {
         switch self {
         case .hrv: return s.vitals.hrv.baseline
         case .heartRate: return s.vitals.rhr.baseline
-        default: return nil
+        case .breath: return s.vitals.breath?.baseline
+        case .oxygen: return s.vitals.spo2?.baseline
+        case .temp: return 0
         }
     }
     var goodWhenPositive: Bool {
         switch self {
         case .hrv, .oxygen: return true
-        case .heartRate, .temp: return false
+        case .heartRate, .temp, .breath: return false
         }
+    }
+    func format(_ value: Double) -> String {
+        let text = Fmt.number(value, decimals: decimals)
+        return signed && value > 0 && text != "0.0" ? "+\(text)" : text
     }
 }
 
@@ -366,6 +460,37 @@ enum Route: Hashable {
     case trends
     case allDays
     case sleepDebt
+    case stress
+    case guidance
+    case reports
+    case periodReport(String)
+    case tags(String)
+    case insights
+    case cycle
+    case workouts
+    case workout(String)
+    case live(LiveMode)
+    case ring
+}
+
+/// What a live heart rate session is for.
+enum LiveMode: String, Hashable, CaseIterable, Identifiable {
+    case check, workout, breathe
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .check: return "Heart Rate Now"
+        case .workout: return "Workout"
+        case .breathe: return "Breathing"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .check: return "heart.fill"
+        case .workout: return "figure.run"
+        case .breathe: return "wind"
+        }
+    }
 }
 
 extension Summary {

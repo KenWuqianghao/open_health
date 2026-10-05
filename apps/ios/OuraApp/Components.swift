@@ -421,7 +421,10 @@ struct VitalTrendView: View {
                                detail: points.last.map { Fmt.monthDay($0.date) })
                     if let last = points.last {
                         BigValue(format(last.value), kind.unit, style: .largeTitle)
-                        if let d = deltaPct {
+                        if kind.signed {
+                            Text("Difference from your average of the 14 nights before")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        } else if let d = deltaPct {
                             Text("\(d >= 0 ? "+" : "")\(Int(d.rounded()))% vs baseline")
                                 .font(.subheadline).foregroundStyle(accent)
                         }
@@ -472,6 +475,9 @@ struct VitalTrendView: View {
 
     private var deltaPct: Double? {
         guard let last = points.last, let base = kind.baseline(in: s), base > 0 else { return nil }
+        // blood oxygen and breathing move by a few percent at most: a percent of
+        // the value says nothing, so they show the statistics only
+        guard kind == .hrv || kind == .heartRate else { return nil }
         return (last.value - base) / base * 100
     }
 
@@ -479,7 +485,7 @@ struct VitalTrendView: View {
         Theme.tone(delta: deltaPct, goodWhenPositive: kind.goodWhenPositive)
     }
 
-    private func format(_ v: Double) -> String { Fmt.number(v, decimals: kind.decimals) }
+    private func format(_ v: Double) -> String { kind.format(v) }
 }
 
 private struct VitalTrendChart: View {

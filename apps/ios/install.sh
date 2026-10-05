@@ -114,7 +114,7 @@ mkdir -p "$APPDIR/build"
 if ! xcodebuild -project "$APPDIR/OuraApp.xcodeproj" -scheme OuraApp \
     -destination "platform=iOS,id=$UDID" -configuration Debug \
     -derivedDataPath "$APPDIR/build/DerivedData-device" \
-    DEVELOPMENT_TEAM="$TEAM_ID" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+    DEVELOPMENT_TEAM="$TEAM_ID" APP_BUNDLE_ID="$BUNDLE_ID" \
     -allowProvisioningUpdates -allowProvisioningDeviceRegistration build > "$LOG" 2>&1; then
   grep -E "error:|No Accounts|No profiles|provisioning" "$LOG" | head -15 >&2 || true
   die "The build failed. Full log: $LOG"

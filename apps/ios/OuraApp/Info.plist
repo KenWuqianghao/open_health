@@ -30,6 +30,9 @@
 			</array>
 		</dict>
 	</array>
+	<!-- The App Group of this build; the widgets read the snapshot from it. -->
+	<key>AppGroupID</key>
+	<string>$(APP_GROUP_ID)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>

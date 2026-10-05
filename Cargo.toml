@@ -17,3 +17,11 @@ repository = "https://github.com/Th0rgal/open_health"
 [profile.release]
 lto = true
 strip = true
+
+# Local iteration on open_oura (feat/native-parity). Remove before a release and
+# bump the `rev` pins in the crates instead.
+[patch."https://github.com/KenWuqianghao/open_oura"]
+oura-protocol = { path = "../open_oura/crates/oura-protocol" }
+oura-link = { path = "../open_oura/crates/oura-link" }
+oura-store = { path = "../open_oura/crates/oura-store" }
+oura-analysis = { path = "../open_oura/crates/oura-analysis" }

@@ -62,12 +62,12 @@ final class HealthBackgroundTests: XCTestCase {
 
     func testFakeClientRecordsDeliveryAndObservers() async throws {
         let client = FakeHealthReadClient()
-        for t in HealthReadTypes.all {
+        for t in HealthReadTypes.wake {
             try await client.enableBackgroundDelivery(t.sampleType, frequency: HealthBackground.frequency(for: t.kind))
             _ = client.observe(t.sampleType) { completion in completion() }
         }
-        XCTAssertEqual(client.delivery.count, HealthReadTypes.all.count)
-        XCTAssertEqual(client.observed.count, HealthReadTypes.all.count)
+        XCTAssertEqual(client.delivery.count, HealthReadTypes.wake.count)
+        XCTAssertEqual(client.observed.count, HealthReadTypes.wake.count)
         XCTAssertTrue(client.delivery.contains { $0.0 == HKQuantityType(.stepCount).identifier && $0.1 == .hourly })
     }
 }

@@ -49,12 +49,21 @@ struct HealthExportStatus: Equatable {
     var progress = ""
     var lastSuccessAt: Date?
     var lastError: String?
+    /// Types the user turned off for this app in Health; they are not written.
+    var typesOff: [String] = []
     var pendingDays = 0
     var lastCounts = "—"
     var deferredForUnlock = false
 }
 
 /// The export pipeline. Runs off the main actor; the UI face is `HealthExporter`.
+enum HealthExportError: LocalizedError {
+    case allTypesOff
+    var errorDescription: String? {
+        "Open Oura may not write to Health. Open the Health app, tap your picture, Apps, Open Oura, then Turn On All."
+    }
+}
+
 actor HealthExportEngine {
     static let backoff: [TimeInterval] = [5 * 60, 30 * 60, 2 * 3600, 6 * 3600, 24 * 3600]
     static let maxAttempts = 6
@@ -84,6 +93,13 @@ actor HealthExportEngine {
         .heartRate, .heartRateVariabilitySDNN, .restingHeartRate, .respiratoryRate, .oxygenSaturation,
         .stepCount, .activeEnergyBurned, .basalEnergyBurned, .distanceWalkingRunning,
     ]
+
+    /// Short names of `deniedTypes()` for the transcript and the settings screen.
+    func deniedTypeNames() -> [String] {
+        deniedTypes().map { $0.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "")
+            .replacingOccurrences(of: "HKCategoryTypeIdentifier", with: "")
+            .replacingOccurrences(of: "HKWorkoutTypeIdentifier", with: "Workouts") }.sorted()
+    }
 
     func requestAuthorization() async throws {
         try await client.requestShare(Self.shareTypes)
@@ -238,20 +254,33 @@ actor HealthExportEngine {
 
     /// Delete our objects in the day's windows, then write the plan.
     private func export(_ plan: DayPlan, previous: HealthDayState, device: HKDevice?) async throws -> (samples: Int, workouts: Int) {
+        // A type the user turned off in Health is skipped: it is their choice, and one
+        // such type must not fail the whole day. With every type off, nothing can be
+        // written and the user must know where to turn them on.
+        let off = deniedTypes()
+        if off.count == Self.shareTypes.count { throw HealthExportError.allTypesOff }
+        let allowed: (HKSampleType) -> Bool = { !off.contains($0.identifier) }
+
         for id in Self.quantityIdentifiers {
-            guard let type = HKObjectType.quantityType(forIdentifier: id) else { continue }
+            guard let type = HKObjectType.quantityType(forIdentifier: id), allowed(type) else { continue }
             _ = try await client.deleteOurObjects(of: type, in: plan.dayWindow)
         }
-        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
+        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis), allowed(sleep) {
             for w in Self.union(previous.sleepWindows.map(\.interval) + plan.sleepWindows) {
                 _ = try await client.deleteOurObjects(of: sleep, in: w)
             }
         }
-        for w in Self.union(previous.workoutWindows.map(\.interval) + plan.workoutWindows) {
-            _ = try await client.deleteOurObjects(of: HKObjectType.workoutType(), in: w)
+        let workoutsAllowed = allowed(HKObjectType.workoutType())
+        if workoutsAllowed {
+            for w in Self.union(previous.workoutWindows.map(\.interval) + plan.workoutWindows) {
+                _ = try await client.deleteOurObjects(of: HKObjectType.workoutType(), in: w)
+            }
         }
 
-        let objects = Self.materialize(plan.samples, device: device)
+        let objects = Self.materialize(plan.samples, device: device).filter { object in
+            guard let sample = object as? HKSample else { return true }
+            return allowed(sample.sampleType)
+        }
         var written = 0
         var i = 0
         while i < objects.count {
@@ -261,11 +290,16 @@ actor HealthExportEngine {
             i += Self.saveChunk
         }
         var workouts = 0
-        for w in plan.workouts {
+        for w in plan.workouts where workoutsAllowed {
             try await client.saveWorkout(w, device: device, metadata: ["OuraWorkoutID": w.id])
             workouts += 1
         }
         return (written, workouts)
+    }
+
+    /// Identifiers of the share types the user turned off for this app in Health.
+    func deniedTypes() -> Set<String> {
+        Set(Self.shareTypes.filter { client.shareDenied($0) }.map(\.identifier))
     }
 
     static func union(_ windows: [DateInterval]) -> [DateInterval] {
@@ -445,6 +479,9 @@ final class HealthExporter: ObservableObject {
         let st = HealthExportStateStore.load()
         status.lastCounts = "\(st.daysWritten) days · \(st.samplesWritten) samples · \(st.workoutsWritten) workouts"
         status.pendingDays = st.days.values.filter { $0.okAt == nil }.count
+        let off = await engine.deniedTypeNames()
+        status.typesOff = off
+        if !off.isEmpty { dlog("health", "not written, turned off in Health: \(off.joined(separator: ", "))") }
         dlog("health", "pass \(reason.tag): wrote \(outcome.daysWritten) days / \(outcome.samplesWritten) samples / \(outcome.workoutsWritten) workouts, skipped \(outcome.daysSkipped), failed \(outcome.daysFailed)\(outcome.deferredForUnlock ? ", deferred (locked)" : "")\(outcome.error.map { " — \($0)" } ?? "")")
         if let (r, s) = rerun {
             rerun = nil

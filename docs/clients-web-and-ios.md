@@ -38,7 +38,7 @@ metric there once and both clients receive it in the JSON.
 | Feature | Web (`app.js`) | iOS (`OuraApp.swift`) | Data (JSON key) | Model |
 | --- | --- | --- | --- | --- |
 | **Sleep / Readiness / Activity scores** | `renderScores` | `ScoresCard` → `ScoreDetailView` | `scores.days[ymd].{sleep,readiness,activity}` | none (`oura-analysis::scores`; see open_oura `docs/algorithms/live-scores.md`) |
-| **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`source: ring`) | none (`sleep_phase_data` 0x5a pages) |
+| **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`stage_source: ring`) | none (`sleep_phase_data` 0x5a pages) |
 | Digest headline | `load()` digest | `RootView` digest | `digest` | — |
 | Vitals (HRV/RHR/temp/SpO₂) | `renderTiles` / `VitalCell`-like | `VitalCell` | `vitals`, `nights[]` | — |
 | **Unified day (night + activity)** | `renderDay`, `dayCard` | `TodayCard` | `nights[]`, `activity*` | — |
@@ -54,6 +54,19 @@ metric there once and both clients receive it in the JSON.
 | Steps / active calories / **distance** | activity report stats | activity day stats | `activity_daily` (incl. `distance_m`) | — |
 | Previous days browser | `openDaysBrowser` → `openDayPage` | `AllDaysView` → `DayDetailView` | day keys | — |
 | Device & data health | `renderDevice` | device section | `device`, `streams` | — |
+| **Breathing rate, temperature deviation, baselines** | not yet | `VitalCell` (`.breath`, `.temp`), `NightVitalsCard` | `vitals.{breath,spo2,temp_dev}`, `nights[].{breath,temp_dev}` | — |
+| **Naps, stage trends** | not yet | `SleepReport` naps card, `TrendsView` | `nights[].kind`, `nights[].*_min` | — |
+| **Battery history and days left** | not yet | `RingView`, `BatteryChart` | `device.battery` | — |
+| **Workouts from all sources** | not yet | `WorkoutsView`, `WorkoutDetailView`, `AddWorkoutView` | `workouts`, `journal.workouts`, `external.json` | AAD (torch) or MET rule |
+| **Symptom Radar without the model** | `renderIllness` (footer says rules or model) | `IllnessCard(fromRules:)` | `illness` (`basis: rules`) | none (`insights::illness`) |
+| **Resting heart-rate alert (NightSignal)** | `renderIllness` line under the biomarkers | `IllnessCard(nightSignal:)` → `NightSignalRow` | `illness.nightsignal` (`alert`, `rhr`, `baseline`, `current`, `recent`) | none (open_oura `insights::nightsignal`) |
+| **Daytime stress, resilience** | not yet | `StressCard` → `StressDetailView`, `ResilienceCard` | `stress`, `resilience` | none (`insights::stress`) |
+| **Bedtime guidance, regularity, chronotype** | not yet | `GuidanceCard` → `GuidanceView` | `guidance` | none (`insights::{bedtime,regularity}`) |
+| **Weekly and monthly reports** | not yet | `ReportsView` → `PeriodReportView` | `reports` | — |
+| **Tags and what follows them** | `oura journal` (CLI) | `DayTagsRow` → `TagsView`, `TagInsightsView` | `journal`, `correlations` | — |
+| **Cycle estimate** | not yet | `CycleView` | `cycle`, `journal.periods` | none (`insights::cycle`) |
+| **Rest mode** | `oura journal` (CLI) | Settings switch, `RestModeBanner` | `rest_mode`, `scores` | — |
+| **Export (CSV, JSON)** | `oura export` (CLI) | Settings → Export | `export_daily_csv` | — |
 
 ## The day is one unit — pair night + activity by *wake date*
 
@@ -129,11 +142,23 @@ hair. We expose per-stage means (esp. deep-sleep HRV) rather than an overnight H
 nocturnal HRV is stage-driven (deep ↑, REM ↓), so a slope tracks stage order, not recovery —
 which is why Oura's own app has no per-night HRV trend either.
 
+## Known gaps (iOS has it, the web does not yet)
+
+The summary JSON has every key for these features, and the desktop CLI has
+`oura summary`, `oura export`, `oura journal` and `oura demo-db`. The web dashboard
+(`app.js`) does not show them yet: breathing rate and temperature deviation, naps,
+battery history, the workout list with its sources, daytime stress and resilience,
+bedtime guidance, reports, tags and correlations, the cycle estimate, rest mode.
+See `docs/journal-and-insights.md` for the keys.
+
+These are iOS-only by nature: notifications, widgets, Siri, live heart rate, the
+ring finder, the Apple Health workout import, restore from the hub.
+
 ## Known gaps (web-only, not yet on iOS)
 
-- **Advanced & debugging**: on-ring feature toggles (`/api/feature`) and the per-type
-  event stream. Profile editing is native on iOS, including optional Apple Health
-  import for date of birth, biological sex, height, and weight.
+- **Advanced & debugging**: the per-type event stream. The on-ring feature toggles
+  are on iOS now (the Ring page). Profile editing is native on iOS, including
+  optional Apple Health import for date of birth, biological sex, height, and weight.
 - **Apple Health export** is iOS-only by nature: the web dashboard has no health store.
   The samples come from the shared brain `oura-summary::health_export`
   (`healthSamplesJson` over FFI), so the web could render the same day bundles as an

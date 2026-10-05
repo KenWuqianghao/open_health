@@ -258,6 +258,13 @@ typedef void (*UniffiCallbackInterfaceBleWriterMethod0)(uint64_t, RustBuffer, vo
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_LIVE_BEAT_LISTENER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_LIVE_BEAT_LISTENER_METHOD0
+typedef void (*UniffiCallbackInterfaceLiveBeatListenerMethod0)(uint64_t, uint16_t, uint16_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SYNC_PROGRESS_LISTENER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SYNC_PROGRESS_LISTENER_METHOD0
 typedef void (*UniffiCallbackInterfaceSyncProgressListenerMethod0)(uint64_t, RustBuffer, uint64_t, uint32_t, void* _Nonnull, 
@@ -271,6 +278,14 @@ typedef struct UniffiVTableCallbackInterfaceBleWriter {
     UniffiCallbackInterfaceBleWriterMethod0 _Nonnull write;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceBleWriter;
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_LIVE_BEAT_LISTENER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_LIVE_BEAT_LISTENER
+typedef struct UniffiVTableCallbackInterfaceLiveBeatListener {
+    UniffiCallbackInterfaceLiveBeatListenerMethod0 _Nonnull onBeat;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceLiveBeatListener;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SYNC_PROGRESS_LISTENER
@@ -301,6 +316,16 @@ void*_Nonnull uniffi_oura_core_fn_constructor_ringsession_new(uint64_t writer, R
 void uniffi_oura_core_fn_method_ringsession_cancel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_LATEST_READING
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_LATEST_READING
+uint64_t uniffi_oura_core_fn_method_ringsession_latest_reading(void*_Nonnull ptr, RustBuffer key_hex
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_LIVE_HEART_RATE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_LIVE_HEART_RATE
+uint64_t uniffi_oura_core_fn_method_ringsession_live_heart_rate(void*_Nonnull ptr, RustBuffer key_hex, uint64_t listener
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_PAIR
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_PAIR
 uint64_t uniffi_oura_core_fn_method_ringsession_pair(void*_Nonnull ptr, RustBuffer db_path, RustBuffer key_hex, RustBuffer plan, uint64_t progress
@@ -316,6 +341,16 @@ uint64_t uniffi_oura_core_fn_method_ringsession_probe(void*_Nonnull ptr, RustBuf
 void uniffi_oura_core_fn_method_ringsession_push_frame(void*_Nonnull ptr, RustBuffer data, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_RING_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_RING_STATUS
+uint64_t uniffi_oura_core_fn_method_ringsession_ring_status(void*_Nonnull ptr, RustBuffer db_path, RustBuffer key_hex
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_SET_FEATURE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_SET_FEATURE
+uint64_t uniffi_oura_core_fn_method_ringsession_set_feature(void*_Nonnull ptr, RustBuffer db_path, RustBuffer key_hex, RustBuffer feature, int8_t on
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_SYNC
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_METHOD_RINGSESSION_SYNC
 uint64_t uniffi_oura_core_fn_method_ringsession_sync(void*_Nonnull ptr, RustBuffer db_path, RustBuffer key_hex, uint64_t progress
@@ -329,6 +364,11 @@ uint64_t uniffi_oura_core_fn_method_ringsession_sync_with(void*_Nonnull ptr, Rus
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_INIT_CALLBACK_VTABLE_BLEWRITER
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_INIT_CALLBACK_VTABLE_BLEWRITER
 void uniffi_oura_core_fn_init_callback_vtable_blewriter(UniffiVTableCallbackInterfaceBleWriter* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_INIT_CALLBACK_VTABLE_LIVEBEATLISTENER
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_INIT_CALLBACK_VTABLE_LIVEBEATLISTENER
+void uniffi_oura_core_fn_init_callback_vtable_livebeatlistener(UniffiVTableCallbackInterfaceLiveBeatListener* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_INIT_CALLBACK_VTABLE_SYNCPROGRESSLISTENER
@@ -347,9 +387,34 @@ RustBuffer uniffi_oura_core_fn_func_core_version(RustCallStatus *_Nonnull out_st
 RustBuffer uniffi_oura_core_fn_func_export_batch_json(RustBuffer db_path, int64_t after_event_id, int64_t after_reading_id, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXPORT_DAILY_CSV
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXPORT_DAILY_CSV
+RustBuffer uniffi_oura_core_fn_func_export_daily_csv(RustBuffer db_path, int64_t tz_offset, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXTERNAL_WRITE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_EXTERNAL_WRITE
+void uniffi_oura_core_fn_func_external_write(RustBuffer db_path, RustBuffer json, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_HEALTH_SAMPLES_JSON
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_HEALTH_SAMPLES_JSON
 RustBuffer uniffi_oura_core_fn_func_health_samples_json(RustBuffer db_path, int64_t tz_offset_s, RustBuffer since_unix, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_IMPORT_BATCH_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_IMPORT_BATCH_JSON
+RustBuffer uniffi_oura_core_fn_func_import_batch_json(RustBuffer db_path, RustBuffer batch_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_JOURNAL_APPLY
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_JOURNAL_APPLY
+RustBuffer uniffi_oura_core_fn_func_journal_apply(RustBuffer db_path, RustBuffer op_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_JOURNAL_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_JOURNAL_JSON
+RustBuffer uniffi_oura_core_fn_func_journal_json(RustBuffer db_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_QUICK_SUMMARY_JSON
@@ -370,6 +435,11 @@ int64_t uniffi_oura_core_fn_func_store_schema_version(RustBuffer db_path, RustCa
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_SUMMARY_JSON
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_SUMMARY_JSON
 RustBuffer uniffi_oura_core_fn_func_summary_json(RustBuffer db_path, int64_t tz_offset, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WRITE_DEMO_DB
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WRITE_DEMO_DB
+void uniffi_oura_core_fn_func_write_demo_db(RustBuffer db_path, uint32_t days, int64_t tz_offset, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_OURA_CORE_RUSTBUFFER_ALLOC
@@ -664,9 +734,39 @@ uint16_t uniffi_oura_core_checksum_func_export_batch_json(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXPORT_DAILY_CSV
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXPORT_DAILY_CSV
+uint16_t uniffi_oura_core_checksum_func_export_daily_csv(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXTERNAL_WRITE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_EXTERNAL_WRITE
+uint16_t uniffi_oura_core_checksum_func_external_write(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_HEALTH_SAMPLES_JSON
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_HEALTH_SAMPLES_JSON
 uint16_t uniffi_oura_core_checksum_func_health_samples_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_IMPORT_BATCH_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_IMPORT_BATCH_JSON
+uint16_t uniffi_oura_core_checksum_func_import_batch_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_JOURNAL_APPLY
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_JOURNAL_APPLY
+uint16_t uniffi_oura_core_checksum_func_journal_apply(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_JOURNAL_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_JOURNAL_JSON
+uint16_t uniffi_oura_core_checksum_func_journal_json(void
     
 );
 #endif
@@ -694,9 +794,27 @@ uint16_t uniffi_oura_core_checksum_func_summary_json(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_WRITE_DEMO_DB
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_WRITE_DEMO_DB
+uint16_t uniffi_oura_core_checksum_func_write_demo_db(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_CANCEL
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_CANCEL
 uint16_t uniffi_oura_core_checksum_method_ringsession_cancel(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_LATEST_READING
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_LATEST_READING
+uint16_t uniffi_oura_core_checksum_method_ringsession_latest_reading(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_LIVE_HEART_RATE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_LIVE_HEART_RATE
+uint16_t uniffi_oura_core_checksum_method_ringsession_live_heart_rate(void
     
 );
 #endif
@@ -715,6 +833,18 @@ uint16_t uniffi_oura_core_checksum_method_ringsession_probe(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_PUSH_FRAME
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_PUSH_FRAME
 uint16_t uniffi_oura_core_checksum_method_ringsession_push_frame(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_RING_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_RING_STATUS
+uint16_t uniffi_oura_core_checksum_method_ringsession_ring_status(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_SET_FEATURE
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_RINGSESSION_SET_FEATURE
+uint16_t uniffi_oura_core_checksum_method_ringsession_set_feature(void
     
 );
 #endif
@@ -739,6 +869,12 @@ uint16_t uniffi_oura_core_checksum_constructor_ringsession_new(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_BLEWRITER_WRITE
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_BLEWRITER_WRITE
 uint16_t uniffi_oura_core_checksum_method_blewriter_write(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_LIVEBEATLISTENER_ON_BEAT
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_METHOD_LIVEBEATLISTENER_ON_BEAT
+uint16_t uniffi_oura_core_checksum_method_livebeatlistener_on_beat(void
     
 );
 #endif

@@ -110,6 +110,13 @@ struct ProfileSettingsView: View {
     @State private var confirmForget = false
     @State private var confirmRemove = false
     @State private var removeMessage: String?
+    @State private var units = Units.current
+    @State private var restMode: Bool
+    @State private var notify: [NotificationKind: Bool] = Dictionary(
+        uniqueKeysWithValues: NotificationKind.allCases.map { ($0, NotifierSettings.isOn($0)) })
+    @State private var notifyDenied = false
+    @ObservedObject private var healthImport = HealthImport.shared
+    let summary: Summary?
     let onSaved: () -> Void
     private static let when: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; return f
@@ -121,6 +128,7 @@ struct ProfileSettingsView: View {
         parts.append(health.status.lastCounts)
         if health.status.pendingDays > 0 { parts.append("\(health.status.pendingDays) day(s) pending") }
         if health.status.deferredForUnlock { parts.append("waiting for unlock") }
+        if !health.status.typesOff.isEmpty { parts.append("off in Health: \(health.status.typesOff.joined(separator: ", "))") }
         if let e = health.status.lastError { parts.append("error: \(e)") }
         return parts.joined(separator: " · ")
     }
@@ -155,9 +163,34 @@ struct ProfileSettingsView: View {
         }
     }
 
-    init(profile: Profile?, onSaved: @escaping () -> Void) {
+    init(profile: Profile?, summary: Summary? = nil, onSaved: @escaping () -> Void) {
         _profile = State(initialValue: EditableProfile(profile))
+        _restMode = State(initialValue: summary?.restMode?.value?.on ?? false)
+        self.summary = summary
         self.onSaved = onSaved
+    }
+
+    /// Height and weight in the chosen units; the profile keeps cm and kg.
+    private var heightShown: Binding<Double> {
+        Binding(get: { (units.height(cm: profile.heightCm) * 10).rounded() / 10 },
+                set: { profile.heightCm = units.centimeters($0) })
+    }
+    private var weightShown: Binding<Double> {
+        Binding(get: { (units.weight(kg: profile.weightKg) * 10).rounded() / 10 },
+                set: { profile.weightKg = units.kilograms($0) })
+    }
+
+    private func setNotification(_ kind: NotificationKind, _ on: Bool) {
+        notify[kind] = on
+        Task {
+            if on, !(await Notifier.shared.requestPermission()) {
+                notify[kind] = false
+                notifyDenied = true
+                return
+            }
+            NotifierSettings.set(kind, on)
+            Notifier.shared.settingsChanged(summary: summary)
+        }
     }
 
     var body: some View {
@@ -170,9 +203,16 @@ struct ProfileSettingsView: View {
                         Text("Other").tag("O")
                     }
                     numberField("Age", value: $profile.age, unit: "yr")
-                    numberField("Height", value: $profile.heightCm, unit: "cm")
-                    numberField("Weight", value: $profile.weightKg, unit: "kg")
+                    numberField("Height", value: heightShown, unit: units.heightUnit)
+                    numberField("Weight", value: weightShown, unit: units.weightUnit)
                     numberField("Ring size", value: $profile.ringSize, unit: "")
+                    Picker("Units", selection: $units) {
+                        ForEach(Units.allCases) { Text($0.title).tag($0) }
+                    }
+                    .onChange(of: units) { _, value in
+                        Units.current = value
+                        onSaved()
+                    }
                 } header: {
                     Text("Your data")
                 } footer: {
@@ -181,10 +221,40 @@ struct ProfileSettingsView: View {
 
                 Section {
                     numberField("Daily activity goal", value: $profile.activityGoalKcal, unit: "kcal")
+                    Toggle("Rest mode", isOn: $restMode)
+                        .onChange(of: restMode) { _, on in
+                            let op: [String: Any] = ["op": "set_rest_mode", "on": on,
+                                                     "day": NotificationRules.localDay(Date())]
+                            if JournalStore.apply(op) != nil { onSaved() }
+                        }
                 } header: {
                     Text("Scores")
                 } footer: {
-                    Text("Active calories per day for the Activity score's \"Meet daily goal\". Oura adapts this goal to you; here it is a fixed number.")
+                    Text("The goal is the active calories per day for the Activity score's \"Meet daily goal\". Oura adapts this goal to you; here it is a fixed number. In rest mode, for an illness or an injury, the app gives no Activity score, and activity does not count for your readiness.")
+                }
+
+                Section {
+                    ForEach(NotificationKind.allCases) { kind in
+                        Toggle(isOn: Binding(get: { notify[kind] ?? false },
+                                             set: { setNotification(kind, $0) })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(kind.title)
+                                Text(kind.detail).font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityIdentifier("notify-\(kind.rawValue)")
+                    }
+                    if notifyDenied {
+                        Button("Allow Notifications in Settings") {
+                            if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("The app decides each notification on this iPhone. Some arrive only after the next sync, because the app has no server that watches your ring.")
                 }
 
                 Section {
@@ -253,7 +323,7 @@ struct ProfileSettingsView: View {
                     if health.enabled {
                         Toggle("Include resting energy (estimate)", isOn: $health.includeBasal)
                         DisclosureGroup("What is exported") {
-                            Text("Sleep: in-bed time, and sleep stages when the on-device models are available.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts when the on-device models detect them.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
+                            Text("Sleep: in-bed time and sleep stages.\nHeart rate every minute, resting heart rate, and HRV (SDNN, only when measured).\nBreathing rate and blood oxygen during sleep.\nSteps (estimated from movement), active energy, and resting energy if you turn it on.\nWorkouts that the app finds from your movement.\n\nNot exported: readiness, sleep and activity scores, skin temperature, distance. If the official Oura app also writes to Health, turn one of the two off to avoid duplicates.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                         Button { health.schedule(.manual(full: false)) } label: {
@@ -282,6 +352,28 @@ struct ProfileSettingsView: View {
                     Text("Apple Health")
                 } footer: {
                     Text("Only measured data is written, never scores. Every day is rewritten in place, so re-running never duplicates. Data stays on this iPhone.")
+                }
+
+                Section {
+                    Toggle("Use workouts from Apple Health", isOn: Binding(
+                        get: { healthImport.enabled },
+                        set: { on in Task { await healthImport.setEnabled(on); onSaved() } }
+                    ))
+                    if healthImport.enabled {
+                        if let at = healthImport.status.lastRunAt {
+                            Text("\(healthImport.status.workouts) workout(s) of the last \(HealthImport.lookBackDays) days"
+                                 + (healthImport.status.vo2max.map { ", VO₂ max \(String(format: "%.1f", $0))" } ?? "")
+                                 + " · read \(Self.when.string(from: at))")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let e = healthImport.status.error {
+                        Label(e, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(Theme.alert)
+                    }
+                } header: {
+                    Text("Apple Watch and other apps")
+                } footer: {
+                    Text("Workouts and the measured VO₂ max from your Apple Watch or another app show in the app and count for your activity. What Open Oura wrote to Health itself is left out.")
                 }
 
                 Section {
@@ -315,6 +407,7 @@ struct ProfileSettingsView: View {
                 } footer: {
                     Text("To connect, open your hub in a browser, go to Connect, and scan the QR code with the Camera app. After each sync the app sends the summary and every new ring event to your own server (oura-hub). With Apple Health on, it also sends the samples other apps and your Apple Watch wrote (never its own export). An agent can read your status, and the data is backed up, while this iPhone is off. The token is kept in the Keychain.")
                 }
+                DataToolsSection(onChanged: onSaved)
             }
             .fullScreenCover(isPresented: $showPairing) { PairingView(onPaired: { _ in }) }
             .navigationTitle("Settings")

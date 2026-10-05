@@ -25,7 +25,7 @@ Then reset and pair the ring. The full guide, with the ring reset and the hub:
 - **`dashboard/web/`**: vanilla HTML/CSS/JS health dashboard served locally.
 - **`apps/ios/`**: SwiftUI iOS client and generated Rust FFI bindings.
 - **`crates/oura-cli`**: app-oriented CLI entrypoint, including `oura dashboard`,
-  DNA explorer routes, blood PDF import, model runners, and local dashboard APIs.
+  DNA explorer routes, blood PDF import, and local dashboard APIs.
 - **`crates/oura-summary`**: shared dashboard summary JSON consumed by web and iOS.
 - The always-on hub (summary snapshots, ring replica, Apple Health samples, MCP tools)
   lives in its own repo: [oura-hub](https://github.com/KenWuqianghao/oura-hub). The
@@ -33,7 +33,7 @@ Then reset and pair the ring. The full guide, with the ring reset and the hub:
   same from a Mac.
 - **`crates/oura-core` / `crates/oura-ffi`**: native/iOS FFI surfaces.
 - **`crates/oura-dna` + `dna/`**: local VCF trait/PGS scoring catalog and helpers.
-- **`tools/`**: model runners and app-oriented analysis utilities.
+- **`tools/`**: app-oriented analysis utilities.
 
 ## Boundary with open_oura
 
@@ -45,7 +45,7 @@ Then reset and pair the ring. The full guide, with the ring reset and the hub:
 - `oura-analysis`: portable metric algorithms.
 
 Keep reusable protocol/library work in `open_oura`. Keep app UX, dashboard APIs,
-iOS presentation, DNA, blood, and model orchestration here.
+iOS presentation, DNA, and blood here.
 
 ## Quick start (web dashboard)
 

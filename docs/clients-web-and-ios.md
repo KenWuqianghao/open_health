@@ -6,17 +6,17 @@ add or change a feature, you almost always have to touch **both**. This is the m
 | | Web dashboard | Native iOS app |
 | --- | --- | --- |
 | Where | `dashboard/web/` (vanilla HTML/CSS/JS) served by `crates/oura-cli/src/dashboard.rs` | `apps/ios/OuraApp/` (SwiftUI) on `crates/oura-core` (UniFFI) |
-| Entry | `oura dashboard` → `http://127.0.0.1:8090` | `apps/ios/OuraApp/build_run.sh` (model-free) / `build_run_torch.sh` (on-device models) |
+| Entry | `oura dashboard` → `http://127.0.0.1:8090` | `apps/ios/OuraApp/build_run.sh` (simulator) / `apps/ios/install.sh` (iPhone) |
 | Render code | `app.js`, `styles.css`, `index.html` | `OuraApp.swift`, `Theme.swift` |
-| Models run via | Python torch runners (`tools/run_*_model.py`) | on-device `.ptl` (`TorchBridge.{h,mm}` + `SleepStaging`/`CvaModel`/`ActivityModel.swift`) |
+| Models | none; an add-on can supply results through `OURA_MODEL_RUNNER` | none; an add-on can supply results through a `SummaryPlugin` |
 
 ## The one shared brain: `crates/oura-summary`
 
 `oura_summary::build_summary()` computes **the summary JSON both clients render** — vitals,
 per-night stats, the digest, the MET activity profile, steps/kcal, device health. The web
 calls it in `dashboard.rs`; iOS calls it through `oura-core`'s `summary_json()` FFI. The
-models are injected via the `ModelRunner` trait (web: `PythonRunner`; iOS: `NoModelRunner`
-+ the on-device torch code).
+public app runs without models (`NoModelRunner`). An add-on can supply model results
+through `OURA_MODEL_RUNNER` (CLI) or a `SummaryPlugin` (iOS).
 
 The non-model math is the **ported ecore ground truth** from `crates/oura-analysis`
 (`ported::{spo2, temperature, metabolic, baseline}`): SpO₂ calibration, nightly skin
@@ -29,31 +29,43 @@ metric there once and both clients receive it in the JSON.
 - **A new computed metric / field** → add it once in `oura-summary` (`build_summary`). Both
   clients receive it in the JSON. Then render it in **both** `app.js` and `OuraApp.swift`.
 - **A new visualization / UI** (no new data) → do it in **both** `app.js` and `OuraApp.swift`.
-- **A new model** → wire **both** runners: a `tools/run_*_model.py` (used by `PythonRunner`)
-  **and** an `oura_*` function in `TorchBridge.mm` + a Swift `*Model.swift` that builds the
-  same input tensors and folds the result into the summary.
+- **Model results** → not in this repository. An add-on supplies them in the JSON shape
+  of `ModelOutputs` (`oura-summary`), so both clients render the same fields.
 
 ## Feature ↔ feature correspondence
 
 | Feature | Web (`app.js`) | iOS (`OuraApp.swift`) | Data (JSON key) | Model |
 | --- | --- | --- | --- | --- |
 | **Sleep / Readiness / Activity scores** | `renderScores` | `ScoresCard` → `ScoreDetailView` | `scores.days[ymd].{sleep,readiness,activity}` | none (`oura-analysis::scores`; see open_oura `docs/algorithms/live-scores.md`) |
-| **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`source: ring`) | none (`sleep_phase_data` 0x5a pages) |
+| **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`stage_source: ring`) | none (`sleep_phase_data` 0x5a pages) |
 | Digest headline | `load()` digest | `RootView` digest | `digest` | — |
 | Vitals (HRV/RHR/temp/SpO₂) | `renderTiles` / `VitalCell`-like | `VitalCell` | `vitals`, `nights[]` | — |
 | **Unified day (night + activity)** | `renderDay`, `dayCard` | `TodayCard` | `nights[]`, `activity*` | — |
-| **Full-page sleep report** (polysomnograph + clinical metrics + interpretation) | `openDayPage`→`sleepReport`, `polysomnograph`, `hypnoSvg` | `DayReportView`→`SleepReport`, `Polysomnograph` (Reports.swift) | `nights[].{stages_full,series,metrics}` | SleepNet |
-| **Sleep debt** (14-day card + cumulative debt / total sleep detail) | `renderSleepDebt`→`openSleepDebt` | `SleepDebtCard`→`SleepDebtDetail` | `sleep_debt`, grouped by wake date including naps | SleepNet |
-| **Full-page activity report** (24h MET profile + intensity metrics) | `openDayPage`→`activityReport`, `metProfileSvg` | `DayReportView`→`ActivityReport`, `MetProfile` (Reports.swift) | `activity_profile`, `activity_daily`, `activity` | AAD |
-| Stage breakdown | `stageBar` | `StageBreakdown` | `nights[].{deep,light,rem,wake}_pct` | SleepNet |
-| **Autonomic recovery by stage** (mean HR/HRV in deep/light/REM) | `sleepReport` autonomic grid | `SleepReport` `autonomicGrid` | `nights[].autonomic` | SleepNet (needs hypnogram) |
-| **Cardiovascular age** | `renderCardio` | Cardio section | `cardio` | CVA (web: Python · iOS: `CvaModel`) |
+| **Full-page sleep report** (polysomnograph + clinical metrics + interpretation) | `openDayPage`→`sleepReport`, `polysomnograph`, `hypnoSvg` | `DayReportView`→`SleepReport`, `Polysomnograph` (Reports.swift) | `nights[].{stages_full,series,metrics}` | ring hypnogram; an add-on can replace it |
+| **Sleep debt** (14-day card + cumulative debt / total sleep detail) | `renderSleepDebt`→`openSleepDebt` | `SleepDebtCard`→`SleepDebtDetail` | `sleep_debt`, grouped by wake date including naps | ring hypnogram; an add-on can replace it |
+| **Full-page activity report** (24h MET profile + intensity metrics) | `openDayPage`→`activityReport`, `metProfileSvg` | `DayReportView`→`ActivityReport`, `MetProfile` (Reports.swift) | `activity_profile`, `activity_daily`, `activity` | none (MET minutes); an add-on can add sessions |
+| Stage breakdown | `stageBar` | `StageBreakdown` | `nights[].{deep,light,rem,wake}_pct` | ring hypnogram; an add-on can replace it |
+| **Autonomic recovery by stage** (mean HR/HRV in deep/light/REM) | `sleepReport` autonomic grid | `SleepReport` `autonomicGrid` | `nights[].autonomic` | ring hypnogram; an add-on can replace it |
+| **Cardiovascular age** | `renderCardio` | Cardio section | `cardio` | add-on only |
 | **VO₂max estimate** | `renderCardio` | Fitness section | `fitness.vo2max` | — (Jackson, model-free) |
 | Movement ridge | `ridgeSvg` | `MovementRidge` | `activity_profile` | — (MET, model-free) |
-| **Activity sessions / workouts** | `openActDetail` (session) | workouts section | `activity` | AAD (web: Python · iOS: `ActivityModel`) |
+| **Activity sessions / workouts** | `openActDetail` (session) | workouts section | `activity` | MET rule; an add-on can replace it |
 | Steps / active calories / **distance** | activity report stats | activity day stats | `activity_daily` (incl. `distance_m`) | — |
 | Previous days browser | `openDaysBrowser` → `openDayPage` | `AllDaysView` → `DayDetailView` | day keys | — |
 | Device & data health | `renderDevice` | device section | `device`, `streams` | — |
+| **Breathing rate, temperature deviation, baselines** | not yet | `VitalCell` (`.breath`, `.temp`), `NightVitalsCard` | `vitals.{breath,spo2,temp_dev}`, `nights[].{breath,temp_dev}` | — |
+| **Naps, stage trends** | not yet | `SleepReport` naps card, `TrendsView` | `nights[].kind`, `nights[].*_min` | — |
+| **Battery history and days left** | not yet | `RingView`, `BatteryChart` | `device.battery` | — |
+| **Workouts from all sources** | not yet | `WorkoutsView`, `WorkoutDetailView`, `AddWorkoutView` | `workouts`, `journal.workouts`, `external.json` | MET rule; an add-on can replace it |
+| **Symptom Radar without the model** | `renderIllness` (footer says rules or model) | `IllnessCard(fromRules:)` | `illness` (`basis: rules`) | none (`insights::illness`) |
+| **Resting heart-rate alert (NightSignal)** | `renderIllness` line under the biomarkers | `IllnessCard(nightSignal:)` → `NightSignalRow` | `illness.nightsignal` (`alert`, `rhr`, `baseline`, `current`, `recent`) | none (open_oura `insights::nightsignal`) |
+| **Daytime stress, resilience** | not yet | `StressCard` → `StressDetailView`, `ResilienceCard` | `stress`, `resilience` | none (`insights::stress`) |
+| **Bedtime guidance, regularity, chronotype** | not yet | `GuidanceCard` → `GuidanceView` | `guidance` | none (`insights::{bedtime,regularity}`) |
+| **Weekly and monthly reports** | not yet | `ReportsView` → `PeriodReportView` | `reports` | — |
+| **Tags and what follows them** | `oura journal` (CLI) | `DayTagsRow` → `TagsView`, `TagInsightsView` | `journal`, `correlations` | — |
+| **Cycle estimate** | not yet | `CycleView` | `cycle`, `journal.periods` | none (`insights::cycle`) |
+| **Rest mode** | `oura journal` (CLI) | Settings switch, `RestModeBanner` | `rest_mode`, `scores` | — |
+| **Export (CSV, JSON)** | `oura export` (CLI) | Settings → Export | `export_daily_csv` | — |
 
 ## The day is one unit — pair night + activity by *wake date*
 
@@ -113,35 +125,45 @@ is personalized like Oura's (`SleepDebtInput.longTermSleepTimeAvgSeconds` ← th
 previous 90 days, IQR-outlier-filtered, clamped to 7–9 h, rounded to 15 min, causal (a
 night never sets its own need), with an 8 h fallback below 14 valid history days — see
 Rust `sleep_need_s` and its Swift mirror `needS(on:)` in `stagedSleepDebt`. The web reads it from the
-summary JSON; iOS recomputes from the
-**on-device** SleepNet hypnogram (`NightRow.stages`), because iOS runs `build_summary` with
-`NoModelRunner` (no server-side staging), so the FFI `stages_full`/`metrics` are empty there.
+summary JSON; iOS recomputes in Swift from `NightRow.stages` (the ring hypnogram, or the
+stages that a `SummaryPlugin` supplies).
 The raw signal series (`nights[].series`) DO come from the FFI on both. If you change the
 smoothing window or a metric definition, change **both** implementations.
 
 **Autonomic-by-stage** (mean HR/HRV per sleep stage) is the same story: Rust
 `autonomic_by_stage` fills `nights[].autonomic` for the web; iOS recomputes in Swift
-(`Sleep.autonomic`) from its on-device hypnogram since that FFI field is null under
-`NoModelRunner`. One deliberate difference: the web maps each HRV/HR sample to a stage by its
+(`Sleep.autonomic`) from `NightRow.stages`. One deliberate difference: the web maps each HRV/HR sample to a stage by its
 **true timestamp** (`hrv_event` gives `interval_min`-spaced samples), while iOS only has the
 even-spread downsampled `series`, so it aligns by **index fraction** — the two can differ by a
 hair. We expose per-stage means (esp. deep-sleep HRV) rather than an overnight HRV "slope":
 nocturnal HRV is stage-driven (deep ↑, REM ↓), so a slope tracks stage order, not recovery —
 which is why Oura's own app has no per-night HRV trend either.
 
+## Known gaps (iOS has it, the web does not yet)
+
+The summary JSON has every key for these features, and the desktop CLI has
+`oura summary`, `oura export`, `oura journal` and `oura demo-db`. The web dashboard
+(`app.js`) does not show them yet: breathing rate and temperature deviation, naps,
+battery history, the workout list with its sources, daytime stress and resilience,
+bedtime guidance, reports, tags and correlations, the cycle estimate, rest mode.
+See `docs/journal-and-insights.md` for the keys.
+
+These are iOS-only by nature: notifications, widgets, Siri, live heart rate, the
+ring finder, the Apple Health workout import, restore from the hub.
+
 ## Known gaps (web-only, not yet on iOS)
 
-- **Advanced & debugging**: on-ring feature toggles (`/api/feature`) and the per-type
-  event stream. Profile editing is native on iOS, including optional Apple Health
-  import for date of birth, biological sex, height, and weight.
+- **Advanced & debugging**: the per-type event stream. The on-ring feature toggles
+  are on iOS now (the Ring page). Profile editing is native on iOS, including
+  optional Apple Health import for date of birth, biological sex, height, and weight.
 - **Apple Health export** is iOS-only by nature: the web dashboard has no health store.
   The samples come from the shared brain `oura-summary::health_export`
   (`healthSamplesJson` over FFI), so the web could render the same day bundles as an
   "export preview" later. The exporter (`HealthExporter.swift`) writes only measured
-  data: in-bed time and sleep stages (torch build), 1-minute heart rate, HRV (SDNN, only
+  data: in-bed time and sleep stages (when the summary has them), 1-minute heart rate, HRV (SDNN, only
   when measured), resting HR, breathing rate, blood oxygen, steps, active energy,
   resting energy (off by default: a Schofield estimate that double counts with a
-  Watch), and workouts (torch build). Steps are a MET estimate. Never written: scores,
+  Watch), and workouts (when the summary has them). Steps are a MET estimate. Never written: scores,
   skin temperature, distance.
 - **Health hub push**: iOS pushes the summary, the raw ring rows, and the Apple
   Health samples other sources wrote after each sync (`HubPush.swift`,
@@ -198,7 +220,7 @@ which is why Oura's own app has no per-night HRV trend either.
 
 When you close one of these gaps, update this section.
 
-## Ring clock resets → epoch-aware time mapping (all three code paths)
+## Ring clock resets → epoch-aware time mapping
 
 `ring_timestamp` (ds) is a **per-boot relative deciseconds counter**: it resets to ~0
 every time the ring reboots (battery drain, firmware reset). Naively anchoring every ds
@@ -207,15 +229,9 @@ can land months in the past). The fix segments events into boot **epochs** — w
 sync order `(captured_unix, then insertion id)`, split on any large backward jump in ds, then use
 the epoch's on-ring `time_sync` (`ring_timestamp` ↔ UTC) records as authoritative anchors.
 `captured_unix` is only an epoch-selection hint and a fallback for legacy data. This
-lives in **three places that must stay in sync**:
-
-- `crates/oura-summary/src/ring_time.rs` — the shared `RingClock`; fixes night/activity/
-  movement **dates for both clients** at once.
-- `tools/epoch_time.py` (helper) used by `tools/run_activity_model.py` and
-  `tools/run_sleep_model.py` — the **web** on-model session/hypnogram times.
-- `apps/ios/OuraApp/EventStore.swift` (`epochs` / `unixSeconds`) used by
-  `ActivityModel.swift` and `SleepStaging.swift` — the **iOS** on-device model times.
-  iOS must be rebuilt to pick this up.
+lives in `crates/oura-summary/src/ring_time.rs`: the shared `RingClock` fixes the
+night, activity, and movement **dates for both clients** at once. An add-on that
+computes its own times must use the same mapping.
 
 ## Premature sleep ends → evidence-based model windows
 
@@ -230,8 +246,8 @@ continues. `oura-summary::normalize_bed_periods` repairs the model boundary in t
 Pulse evidence is deliberately gated: each burst needs multiple firmware-accepted heart
 rate estimates, consecutive bursts can be at most 15 minutes apart, and naps or clean
 bedtime ends never use daytime pulse sampling. The resulting canonical `start_ds/end_ds`
-is passed unchanged to the Python SleepNet runner and iOS `SleepStaging`, so both clients
-score the same recovered window. Regression tests include isolated daytime HR, long gaps,
+is the `sleep_ranges` input of the `ModelRunner`, so both clients and an add-on use the
+same recovered window. Regression tests include isolated daytime HR, long gaps,
 periodic post-nap sampling, and the extracted Ring 5 brief-wake vector.
 
 The polysomnograph's skin-temperature lane uses only `sleep_temp_event`. Generic

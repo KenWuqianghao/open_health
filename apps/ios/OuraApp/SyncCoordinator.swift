@@ -20,6 +20,8 @@ extension ProbeReport: @unchecked Sendable {}
 
 enum SyncTrigger: String, Codable, Sendable {
     case manual, foreground, postPair, bgRefresh, bgProcessing, bleRestore
+    /// Not a sync: a live heart rate stream, or a read or change of ring settings.
+    case live, ringControl
 }
 
 enum SyncExit: String, Codable, Sendable {
@@ -89,6 +91,22 @@ struct SyncPolicy: Sendable {
             return SyncPolicy(attempts: 2, connectTimeout: 10, deadline: 5 * 60, batchEvents: 2048,
                               connect: .reuse,
                               runModels: false, refreshSummary: true, exportHealth: true, idleLock: false)
+        case .live, .ringControl:
+            return SyncPolicy(attempts: 3, connectTimeout: 20, deadline: nil, batchEvents: 0,
+                              connect: .knownThenScan(scanTimeout: 20, mode: .foreground),
+                              runModels: false, refreshSummary: false, exportHealth: false, idleLock: true)
+        }
+    }
+}
+
+/// Why a ring session could not start.
+enum RingAccessError: LocalizedError {
+    case busy, notPaired, noKey
+    var errorDescription: String? {
+        switch self {
+        case .busy: return "The ring is busy with a sync. Try again when the sync is done."
+        case .notPaired: return "No ring is paired."
+        case .noKey: return "The ring key is not readable yet. Unlock the phone once."
         }
     }
 }
@@ -277,6 +295,90 @@ actor SyncCoordinator {
         }
     }
 
+    // ── a session for something else than a sync ──
+
+    /// Connect to the ring, run `body` over a Rust session, and give the link back.
+    /// A sync cannot start while this runs, and this cannot start during a sync.
+    ///
+    /// With `restartOnDrop`, a link that dropped while `body` ran counts as a
+    /// failed attempt and `body` runs again on a new link: a Gen3 ring drops the
+    /// link about 2 s after some writes. `cancelCurrent` ends the run.
+    func withRing<T: Sendable>(trigger: SyncTrigger, restartOnDrop: Bool = false,
+                               onStatus: @escaping @Sendable (String) -> Void = { _ in },
+                               _ body: @escaping @Sendable (RingSession, String) async throws -> T) async throws -> T {
+        guard current == nil else { throw RingAccessError.busy }
+        guard PairedRingStore.load() != nil else { throw RingAccessError.notPaired }
+        guard let key = Keychain.loadKey() else { throw RingAccessError.noKey }
+        current = Run(trigger: trigger, session: nil, transport: nil, deadlineTask: nil, cancelReason: nil)
+        let policy = SyncPolicy.policy(for: trigger)
+        dlog("ring", "session trigger=\(trigger.rawValue)")
+        await MainActor.run { IdleTimerLock.acquire("ring-session") }
+        let keepAlive = await MainActor.run { KeepAlive.begin("ring-session-\(trigger.rawValue)") }
+        var result: Result<T, Error> = .failure(BLEError.notFound)
+        var parked: BLETransport?
+        for attempt in 1...policy.attempts {
+            if current?.cancelReason != nil { break }
+            onStatus(attempt == 1 ? "Connecting to your ring…" : "Connecting again…")
+            let transport: BLETransport
+            do {
+                transport = try await acquireLink(policy, trigger: trigger)
+                current?.transport = transport
+                try await transport.prepare()
+            } catch {
+                dlog("ring", "connect FAILED (attempt \(attempt)): \(error)")
+                if let t = current?.transport { RingCentral.shared.release(t, policy: .release) }
+                current?.transport = nil
+                result = .failure(error)
+                if let e = error as? BLEError, case .poweredOff = e { break }
+                continue
+            }
+            let session = RingSession(writer: RingWriter(transport))
+            current?.session = session
+            // The stream ends when the link drops. A live stream waits for a stop
+            // signal, not for frames, so give it that signal.
+            let pump = Task {
+                for await frame in transport.notifications { session.pushFrame(data: frame) }
+                session.cancel()
+            }
+            onStatus("Connected")
+            do {
+                let value = try await body(session, key)
+                pump.cancel()
+                let dropped = transport.peripheral.state != .connected
+                if restartOnDrop, dropped, current?.cancelReason == nil, attempt < policy.attempts {
+                    dlog("ring", "the link dropped during the session — attempt \(attempt + 1)")
+                    RingCentral.shared.release(transport, policy: .release)
+                    current?.transport = nil
+                    result = .failure(BLEError.disconnected)
+                    continue
+                }
+                result = .success(value)
+                parked = transport
+            } catch {
+                pump.cancel()
+                dlog("ring", "session FAILED (attempt \(attempt)): \(error)")
+                RingCentral.shared.release(transport, policy: .release)
+                current?.transport = nil
+                result = .failure(error)
+                // a cancel from the user ends the run; one from a dropped link does not
+                if current?.cancelReason != nil { break }
+                continue
+            }
+            break
+        }
+        if let parked {
+            RingCentral.shared.release(parked, policy: SyncSettings.linkPolicy)
+        } else {
+            RingCentral.shared.arm()
+        }
+        await MainActor.run {
+            IdleTimerLock.release("ring-session")
+            KeepAlive.end(keepAlive)
+        }
+        current = nil
+        return try result.get()
+    }
+
     // ── the run ──
 
     func sync(trigger: SyncTrigger, reuse: BLETransport? = nil) async -> SyncOutcome {
@@ -394,7 +496,7 @@ actor SyncCoordinator {
                 metrics.exit = .completed
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSuccessKey)
                 UserDefaults.standard.removeObject(forKey: Self.syncIncompleteKey)
-                dlog("sync", "OK — serial=\(report.serial) inserted=\(report.inserted) events=\(report.eventsSynced) cursor=\(report.nextCursor)")
+                dlog("sync", "OK — serial=\(report.serial) inserted=\(report.inserted) events=\(report.eventsSynced) cursor=\(report.nextCursor) clock=\(report.clockWritten ? "written" : "not written")")
                 await RingSync.shared.set(status: "synced — \(report.inserted) new events from \(report.serial)")
                 outcome = .synced(report)
                 break

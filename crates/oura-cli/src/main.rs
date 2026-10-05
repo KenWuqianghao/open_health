@@ -12,8 +12,6 @@ use oura_link::ble::{self, BleTransport};
 use oura_link::OuraClient;
 use oura_store::storage::Store;
 
-#[cfg(feature = "torch")]
-mod activity_model;
 mod blood;
 mod dashboard;
 mod dna;
@@ -126,47 +124,6 @@ enum Command {
         #[arg(long)]
         enable_spo2: bool,
     },
-    /// Detect & label activity sessions from stored events using Oura's OWN
-    /// `automatic_activity_detection` model (runs via tools/run_activity_model.py;
-    /// needs the Python venv with torch). Not a heuristic.
-    Sessions {
-        /// Timezone offset (hours from UTC) for displayed times.
-        #[arg(long, default_value_t = 0)]
-        tz_offset: i64,
-        /// is_workout probability at/above which a segment is marked a workout.
-        #[arg(long, default_value_t = 0.5)]
-        threshold: f64,
-        /// Emit machine-readable JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Compute a Sleep Score for the latest night, live from ring data: Oura's
-    /// SleepNet hypnogram → durations/efficiency/latency, bedtime regularity, then
-    /// the contributor curves + combiner weights calibrated from a trends export.
-    /// Runs via tools/score_sleep.py (needs the Python venv with torch).
-    SleepScore {
-        /// Timezone offset (hours from UTC) for the bedtime clock.
-        #[arg(long, default_value_t = 0)]
-        tz_offset: i64,
-        /// Trends CSV for calibration (default: auto-find ~/Desktop/oura_*trends.csv).
-        #[arg(long)]
-        csv: Option<PathBuf>,
-        /// Emit machine-readable JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Compute a Readiness Score for the latest night, live from ring data. Rebuilds
-    /// the daily-summary + rolling baselines (tools/build_daily.py) then scores via
-    /// the calibrated curves (tools/score_readiness.py). Baseline-relative
-    /// contributors are provisional until ~14 days of history accrue.
-    ReadinessScore {
-        /// Timezone offset (hours from UTC) for the bedtime clock.
-        #[arg(long, default_value_t = 0)]
-        tz_offset: i64,
-        /// Emit machine-readable JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
     /// Print the Apple Health sample bundles the iOS exporter writes (the shared
     /// `oura-summary::health_export` brain), as a per-day table or raw JSON. A
     /// desktop cross-check for what lands in Health.
@@ -180,6 +137,42 @@ enum Command {
         /// Emit the raw JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+    /// Write a demo database (no ring needed): days of plausible data that end
+    /// now, with a journal and Apple Health workouts next to it. Use it with
+    /// `--db <file> dashboard` to try the dashboard.
+    DemoDb {
+        /// The database file to write. It must not exist.
+        out: PathBuf,
+        #[arg(long, default_value_t = 45)]
+        days: u32,
+        /// Timezone offset (hours from UTC) of the demo wearer.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+    },
+    /// Print the summary JSON that the dashboard and the iOS app show (offline).
+    /// `OURA_MODEL_RUNNER` can name a program that adds model results.
+    Summary {
+        /// Timezone offset (hours from UTC) for day boundaries.
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+    },
+    /// Export the data (offline): `csv` is one row per day with every metric,
+    /// `json` is the full summary. Writes to `--out` or to standard output.
+    Export {
+        #[arg(long, default_value = "csv", value_parser = ["csv", "json"])]
+        format: String,
+        #[arg(long, default_value_t = 0)]
+        tz_offset: i64,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Change the journal next to the database (tags, workouts, period days, rest
+    /// mode) with one JSON operation, for example
+    /// `'{"op":"add_tag","day":"2026-09-27","tag":"alcohol"}'`. Without an
+    /// operation, prints the journal.
+    Journal {
+        op: Option<String>,
     },
     /// Subscribe a feature capability (real_steps | atlas | ambient | raw_data |
     /// research_data) via SetFeatureSubscription, to make the ring emit its events.
@@ -217,8 +210,8 @@ enum Command {
         tz_offset: i64,
     },
     /// Serve a local web health dashboard (sleep, cardio, SpO2, activity, device)
-    /// at http://127.0.0.1:PORT. Rust computes from oura.db; torch models run via
-    /// the Python runners. All data stays on this machine.
+    /// at http://127.0.0.1:PORT. Rust computes from oura.db. Set OURA_MODEL_RUNNER
+    /// to a program that adds model results. All data stays on this machine.
     Dashboard {
         /// Local HTTP port.
         #[arg(long, default_value_t = 8090)]
@@ -388,18 +381,61 @@ async fn main() -> Result<()> {
             enable_hr,
             enable_spo2,
         } => cmd_features(&cli, &key, *enable_hr, *enable_spo2).await,
-        Command::Sessions {
-            tz_offset,
-            threshold,
-            json,
-        } => cmd_sessions(&cli, *tz_offset, *threshold, *json),
-        Command::SleepScore {
-            tz_offset,
-            csv,
-            json,
-        } => cmd_sleep_score(&cli, *tz_offset, csv.clone(), *json),
-        Command::ReadinessScore { tz_offset, json } => cmd_readiness_score(&cli, *tz_offset, *json),
         Command::HealthSamples { tz_offset, day, json } => cmd_health_samples(&cli, *tz_offset, day.as_deref(), *json),
+        Command::DemoDb { out, days, tz_offset } => {
+            if out.exists() {
+                return Err(anyhow!("{} exists already", out.display()));
+            }
+            let end_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let report = oura_summary::demo::write_demo(
+                out,
+                &oura_summary::demo::DemoOptions { days: *days, end_unix, tz: *tz_offset, seed: 7 },
+            )?;
+            println!(
+                "wrote {}: {} days, {} sleep periods, {} events",
+                out.display(), report.days, report.nights, report.events
+            );
+            Ok(())
+        }
+        Command::Summary { tz_offset } => {
+            let v = dashboard::build_summary(&cli.db, *tz_offset)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        Command::Export { format, tz_offset, out } => {
+            let runner = oura_summary::NoModelRunner;
+            let text = match format.as_str() {
+                "json" => serde_json::to_string_pretty(&oura_summary::build_summary(
+                    &cli.db, *tz_offset, &runner,
+                )?)?,
+                _ => oura_summary::export_daily_csv(&cli.db, *tz_offset, &runner)?,
+            };
+            match out {
+                Some(path) => {
+                    std::fs::write(path, text)?;
+                    println!("wrote {}", path.display());
+                }
+                None => print!("{text}"),
+            }
+            Ok(())
+        }
+        Command::Journal { op } => {
+            let journal = match op {
+                Some(op) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    oura_summary::journal::apply(&cli.db, &serde_json::from_str(op)?, now)?
+                }
+                None => oura_summary::journal::read_journal(&cli.db),
+            };
+            println!("{}", serde_json::to_string_pretty(&journal)?);
+            Ok(())
+        }
         Command::Subscribe { feature, mode } => cmd_subscribe(&cli, &key, feature, mode).await,
         Command::FeatureMode { feature, mode } => cmd_feature_mode(&cli, &key, feature, mode).await,
         Command::FeatureStatus => cmd_feature_status(&cli, &key).await,
@@ -577,92 +613,6 @@ async fn cmd_feature_status(cli: &Cli, key: &Option<[u8; 16]>) -> Result<()> {
     Ok(())
 }
 
-/// Label activity sessions by running Oura's own `automatic_activity_detection`
-/// TorchScript model over the stored events. Built with `--features torch` it
-/// runs the model in-process via LibTorch; otherwise it shells out to the
-/// equivalent `tools/run_activity_model.py`. Either way the model — not a
-/// heuristic — produces the labels.
-fn cmd_sessions(cli: &Cli, tz_offset: i64, threshold: f64, json: bool) -> Result<()> {
-    // The runner is owned by open_health. Private model files may be supplied
-    // separately (OURA_MODELS_DIR) or live in the sibling open_oura checkout.
-    let root = pyrunner::require_repo_root(
-        Path::new("tools/run_activity_model.py"),
-        "the activity runner (run `oura sessions` from inside the open_health checkout)",
-    )?;
-    let db = pyrunner::resolve_db(&cli.db)?;
-
-    #[cfg(feature = "torch")]
-    {
-        return activity_model::run(&db, &root, tz_offset, threshold, json);
-    }
-
-    #[cfg(not(feature = "torch"))]
-    {
-        use std::process::Command as Proc;
-        let script_rel = Path::new("tools/run_activity_model.py");
-        let python = pyrunner::venv_python(&root);
-        let mut cmd = Proc::new(&python);
-        cmd.current_dir(&root)
-            .arg(root.join(script_rel))
-            .arg(&db)
-            .arg("--tz")
-            .arg(tz_offset.to_string())
-            .arg("--threshold")
-            .arg(threshold.to_string());
-        if json {
-            cmd.arg("--json");
-        }
-        let status = cmd.status().with_context(|| {
-            format!(
-                "running the activity model via {} (is the Python venv with torch set up?)",
-                python.display()
-            )
-        })?;
-        if !status.success() {
-            return Err(anyhow!("activity model exited with {status}"));
-        }
-        Ok(())
-    }
-}
-
-/// Sleep Score for the latest night, computed live from ring data via
-/// tools/score_sleep.py (SleepNet hypnogram + calibrated contributor curves +
-/// combiner weights). Always shells out to Python, which already owns the torch
-/// model path; there is no native LibTorch backend for the scorer.
-fn cmd_sleep_score(cli: &Cli, tz_offset: i64, csv: Option<PathBuf>, json: bool) -> Result<()> {
-    let root =
-        pyrunner::require_repo_root(Path::new("tools/score_sleep.py"), "tools/score_sleep.py")?;
-    let db = pyrunner::resolve_db(&cli.db)?;
-
-    use std::process::Command as Proc;
-    let python = pyrunner::venv_python(&root);
-    let mut cmd = Proc::new(&python);
-    cmd.current_dir(&root)
-        .arg(root.join("tools/score_sleep.py"))
-        .arg(&db)
-        .arg("--tz")
-        .arg(tz_offset.to_string());
-    if let Some(c) = csv {
-        cmd.arg("--csv").arg(c);
-    }
-    if json {
-        cmd.arg("--json");
-    }
-    let status = cmd.status().with_context(|| {
-        format!(
-            "running the sleep scorer via {} (is the Python venv with torch set up?)",
-            python.display()
-        )
-    })?;
-    if !status.success() {
-        return Err(anyhow!("sleep scorer exited with {status}"));
-    }
-    Ok(())
-}
-
-/// Readiness Score live from ring data: rebuild the daily_summary + rolling
-/// baselines (tools/build_daily.py), then score with the calibrated curves
-/// (tools/score_readiness.py). Both run via the Python venv with torch.
 fn cmd_health_samples(cli: &Cli, tz_offset_h: i64, day: Option<&str>, json: bool) -> Result<()> {
     let v = oura_summary::health_export::health_samples(&cli.db, tz_offset_h * 3600, None)?;
     let days: Vec<&serde_json::Value> = v["days"]
@@ -726,48 +676,6 @@ fn cmd_health_samples(cli: &Cli, tz_offset_h: i64, day: Option<&str>, json: bool
     Ok(())
 }
 
-fn cmd_readiness_score(cli: &Cli, tz_offset: i64, json: bool) -> Result<()> {
-    let root = pyrunner::require_repo_root(
-        Path::new("tools/score_readiness.py"),
-        "tools/score_readiness.py",
-    )?;
-    let db = pyrunner::resolve_db(&cli.db)?;
-
-    use std::process::Command as Proc;
-    let python = pyrunner::venv_python(&root);
-
-    // 1) refresh daily_summary + baselines (captured so it can't pollute --json)
-    let build = Proc::new(&python)
-        .current_dir(&root)
-        .arg(root.join("tools/build_daily.py"))
-        .arg(&db)
-        .arg("--tz")
-        .arg(tz_offset.to_string())
-        .output()
-        .with_context(|| "running tools/build_daily.py (is the Python venv with torch set up?)")?;
-    if !build.status.success() {
-        return Err(anyhow!(
-            "build_daily failed: {}",
-            String::from_utf8_lossy(&build.stderr).trim()
-        ));
-    }
-
-    // 2) score
-    let mut cmd = Proc::new(&python);
-    cmd.current_dir(&root)
-        .arg(root.join("tools/score_readiness.py"))
-        .arg(&db);
-    if json {
-        cmd.arg("--json");
-    }
-    let status = cmd
-        .status()
-        .with_context(|| "running tools/score_readiness.py")?;
-    if !status.success() {
-        return Err(anyhow!("readiness scorer exited with {status}"));
-    }
-    Ok(())
-}
 
 async fn cmd_features(
     cli: &Cli,

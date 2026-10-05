@@ -64,9 +64,7 @@ cd apps/ios/OuraApp
 xcodegen generate --spec project-ci.yml
 ```
 
-`project-ci.yml` is the model-free app. `project.yml` adds the on-device PyTorch
-models and needs LibTorch plus model files that are not in this repository. Start with
-`project-ci.yml`.
+`project-ci.yml` is the only spec. The app runs without models.
 
 ## 3. Sign and install on your iPhone
 
@@ -76,8 +74,10 @@ the phone with the cable and tap "Trust" when the phone asks.
 ### With Xcode
 
 1. Open `OuraApp.xcodeproj`.
-2. Select the `OuraApp` target → Signing & Capabilities. Pick your Team. Change the
-   bundle identifier to one you own, for example `com.yourname.openoura`.
+2. Select the project → Build Settings. Set `APP_BUNDLE_ID` to an identifier you own,
+   for example `com.yourname.openoura`. The app, the widget extension
+   (`<id>.widgets`) and the App Group (`group.<id>`) follow it. Then pick your Team
+   for the `OuraApp` and the `OuraWidgets` targets under Signing & Capabilities.
 3. Select your iPhone as the run destination and press Run.
 
 ### From the command line
@@ -96,7 +96,7 @@ id (the UUID). Then:
 xcodebuild -project OuraApp.xcodeproj -scheme OuraApp \
   -destination 'platform=iOS,id=<hardware id>' -configuration Debug \
   -derivedDataPath build/DerivedData-device \
-  DEVELOPMENT_TEAM=<your team id> PRODUCT_BUNDLE_IDENTIFIER=com.yourname.openoura \
+  DEVELOPMENT_TEAM=<your team id> APP_BUNDLE_ID=com.yourname.openoura \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
 ```
 
@@ -159,10 +159,10 @@ lost, the ring needs another factory reset.
 Tap the profile icon → Apple Health → turn on **Write ring data to Apple Health** →
 **Turn On All** → **Allow**.
 
-The app writes only measured data: in-bed time and sleep stages (stages need the
-on-device models), heart rate per minute, resting heart rate, HRV (SDNN, only when
+The app writes only measured data: in-bed time and sleep stages (from the ring's own
+hypnogram), heart rate per minute, resting heart rate, HRV (SDNN, only when
 measured), breathing rate and blood oxygen during sleep, steps (a MET estimate), active
-energy, and resting energy if you turn it on. Workouts come with the models.
+energy, resting energy if you turn it on, and workouts (found from the MET minutes).
 
 Not written: readiness, sleep and activity scores, skin temperature, distance.
 
@@ -189,39 +189,12 @@ the Apple Watch.
 - A Personal Team install expires after 7 days. Build and install again; the data on
   the phone stays.
 
-## Optional: the on-device models
+## Models
 
-Sleep stages, cardiovascular age, workout detection, the Ring 5 step decoder, and
-illness detection run Oura's own TorchScript models on the phone. They are Oura's
-proprietary files and are not in this repository. Without them the app still
-syncs, shows in-bed time, heart rate, blood oxygen, steps, and energy, and exports
-all of that to Apple Health.
-
-1. Put the decrypted models in `notes/models/` (ignored by git). This repository's
-   `tools/pull_oura_apk.sh` and `tools/decrypt_oura_models.py` produce them from the
-   official app on your own phone and your own account; the key is read from the
-   `OURA_MODEL_KEY` environment variable and is never written to disk.
-2. Export the lite-interpreter files the app bundles:
-   ```bash
-   python3 tools/export_mobile.py
-   ```
-   It writes `notes/models/mobile/*.ptl` and pins the versions the iOS bridge
-   implements: `sleepnet_moonstone_1_2_0`, `cva_2_1_5`,
-   `automatic_activity_detection_3_1_12`, `steps_motion_decoder_2_0_0`,
-   `illness_detection_0_5_1`.
-3. Build LibTorch for iOS once (it compiles PyTorch 2.9; count on an hour per slice
-   and about 8 GB of disk for the source plus each slice). The device slice is
-   enough for a phone; the simulator slice adds simulator runs of the torch build:
-   ```bash
-   ./apps/ios/spike/build_libtorch_ios.sh device
-   ./apps/ios/spike/build_libtorch_ios.sh          # optional, simulator
-   ./apps/ios/package-libtorch-xcframeworks.sh
-   ```
-4. Generate the torch project and build it the same way as above:
-   ```bash
-   cd apps/ios/OuraApp && xcodegen generate --spec project.yml
-   ```
-   The app then writes sleep stages and workouts to Apple Health as well.
+The app runs without models. Sleep stages come from the ring's own hypnogram. The
+illness check uses rules and the resting heart-rate alert. Workouts come from the MET
+minutes, and VO2max comes from a formula. An add-on can supply model results through
+a `SummaryPlugin` (`OuraApp/SummaryPlugin.swift`). Cardiovascular age is add-on only.
 
 ## Troubleshooting
 

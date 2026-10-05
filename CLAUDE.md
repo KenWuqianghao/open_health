@@ -1,8 +1,8 @@
 # open_oura — repo guide for agents
 
 Independent, cloud-free client for the Oura ring: BLE sync + decode in Rust, the daily
-health computations in Rust, the ML models (sleep / CVA / activity) as decrypted
-TorchScript. See `README.md` and `docs/` for the reverse-engineering details.
+health computations in Rust. This repository has no models. See `README.md` and
+`docs/` for the details.
 
 ## ⚠️ Two clients render the same data — keep them in sync
 
@@ -19,8 +19,9 @@ feature ↔ feature map) and apply it where it belongs:
 - **New computed metric/field** → add once in `oura-summary`; render in **both** `app.js`
   **and** `OuraApp.swift`.
 - **New visualization/UI** → do it in **both** `app.js` **and** `OuraApp.swift`.
-- **New model** → wire **both** a `tools/run_*_model.py` (web `PythonRunner`) **and** the
-  iOS on-device path (`apps/ios/OuraApp/TorchBridge.mm` + a `*Model.swift`).
+- **Model results** → the app runs without models. An add-on can supply model results
+  through `OURA_MODEL_RUNNER` (CLI, see `ExternalRunner` in `dashboard.rs`) or a
+  `SummaryPlugin` (iOS, `SummaryPlugin.swift`). Do not add model code here.
 
 If you intentionally do only one client, say so and note it in the "Known gaps" section of
 `docs/clients-web-and-ios.md`.
@@ -28,9 +29,8 @@ If you intentionally do only one client, say so and note it in the "Known gaps" 
 ## Building / running
 
 - Web dashboard: `oura dashboard` (see `dashboard/README.md`).
-- iOS (simulator): `apps/ios/OuraApp/build_run.sh` (model-free) or `build_run_torch.sh`
-  (on-device torch models). TestFlight: `apps/ios/TESTFLIGHT.md`.
-- Models, `libtorch`, `oura.db`, and auth keys are gitignored — never commit them.
+- iOS (simulator): `apps/ios/OuraApp/build_run.sh`. TestFlight: `apps/ios/TESTFLIGHT.md`.
+- Model files, `oura.db`, and auth keys are gitignored. Never commit them.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

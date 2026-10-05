@@ -25,11 +25,10 @@ pub fn rmssd(ibi_ms: Vec<u16>) -> f64 {
 /// The full dashboard summary — the SAME `build_summary()` JSON the web client
 /// renders, computed from the synced SQLite DB. `tz_offset` is hours from UTC.
 ///
-/// Models (sleep hypnogram / cardiovascular age / activity sessions) use a
-/// [`oura_summary::ModelRunner`]; on-device we'll pass the `.ptl` torch runner.
-/// For now [`oura_summary::NoModelRunner`] yields the signal-derived panels
-/// (vitals, cardio trend, activity profile, device & data-health, digest) — most
-/// of the dashboard — with model fields null until the torch runner is wired.
+/// The summary uses [`oura_summary::NoModelRunner`]: the signal-derived panels
+/// (vitals, cardio trend, activity profile, device & data-health, digest) and the
+/// ring's own hypnogram. The model fields are null. On iOS an add-on can set them
+/// through a `SummaryPlugin`.
 ///
 /// Returns the summary JSON string, or `{ "error": "…" }`.
 #[uniffi::export]
@@ -131,6 +130,108 @@ pub fn store_schema_version(db_path: String) -> i64 {
         .unwrap_or(-1)
 }
 
+// ── the wearer's entries, export and restore ─────────────────────────────────
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum DataError {
+    #[error("{0}")]
+    Failed(String),
+}
+
+fn data_err(e: impl std::fmt::Display) -> DataError {
+    DataError::Failed(e.to_string())
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// The journal next to the DB (tags, manual workouts, period days, rest mode) as
+/// JSON. See `oura_summary::journal`.
+#[uniffi::export]
+pub fn journal_json(db_path: String) -> String {
+    let journal = oura_summary::journal::read_journal(std::path::Path::new(&db_path));
+    serde_json::to_string(&journal).unwrap_or_else(|_| "{}".into())
+}
+
+/// Apply one journal operation (JSON, see `oura_summary::journal::apply`) and
+/// return the new journal as JSON.
+#[uniffi::export]
+pub fn journal_apply(db_path: String, op_json: String) -> Result<String, DataError> {
+    let op: serde_json::Value = serde_json::from_str(&op_json).map_err(data_err)?;
+    let journal = oura_summary::journal::apply(std::path::Path::new(&db_path), &op, now_unix())
+        .map_err(data_err)?;
+    serde_json::to_string(&journal).map_err(data_err)
+}
+
+/// Replace the data from other sources (Apple Health workouts, measured VO2 max)
+/// that the summary reads. `json` has the shape of `oura_summary::external::External`.
+#[uniffi::export]
+pub fn external_write(db_path: String, json: String) -> Result<(), DataError> {
+    let v: serde_json::Value = serde_json::from_str(&json).map_err(data_err)?;
+    oura_summary::external::write_external(std::path::Path::new(&db_path), &v)
+        .map(|_| ())
+        .map_err(data_err)
+}
+
+/// The daily table as CSV: one row per local day with every metric.
+#[uniffi::export]
+pub fn export_daily_csv(db_path: String, tz_offset: i64) -> Result<String, DataError> {
+    oura_summary::export_daily_csv(
+        std::path::Path::new(&db_path),
+        tz_offset,
+        &oura_summary::NoModelRunner,
+    )
+    .map_err(data_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ImportReport {
+    pub events_seen: u32,
+    pub events_inserted: u32,
+    pub events_rejected: u32,
+    pub readings_inserted: u32,
+}
+
+/// Import one page of raw rows (the JSON of `export_batch_json`, which is also
+/// what the hub serves at `/export/events`) into the DB at `db_path`. Rows that are
+/// in the DB already are skipped, so a restore can run again.
+#[uniffi::export]
+pub fn import_batch_json(db_path: String, batch_json: String) -> Result<ImportReport, DataError> {
+    let batch: oura_store::replication::ExportBatch =
+        serde_json::from_str(&batch_json).map_err(data_err)?;
+    if batch.schema_version > oura_store::replication::BATCH_VERSION {
+        return Err(DataError::Failed(format!(
+            "the backup has batch version {}, this app reads version {}",
+            batch.schema_version,
+            oura_store::replication::BATCH_VERSION
+        )));
+    }
+    let store = oura_store::storage::Store::open(&db_path).map_err(data_err)?;
+    let out = store.import_batch(&batch).map_err(data_err)?;
+    Ok(ImportReport {
+        events_seen: out.events_seen as u32,
+        events_inserted: out.events_inserted as u32,
+        events_rejected: out.events_rejected as u32,
+        readings_inserted: out.readings_inserted as u32,
+    })
+}
+
+/// Write a demo database (no ring needed) with `days` of history that end now.
+/// The file at `db_path` must not exist.
+#[uniffi::export]
+pub fn write_demo_db(db_path: String, days: u32, tz_offset: i64) -> Result<(), DataError> {
+    let path = std::path::Path::new(&db_path);
+    if path.exists() {
+        return Err(DataError::Failed("a database exists already".into()));
+    }
+    let options = oura_summary::demo::DemoOptions { days, end_unix: now_unix(), tz: tz_offset, seed: 7 };
+    oura_summary::demo::write_demo(path, &options).map(|_| ()).map_err(data_err)
+}
+
 // ── on-device BLE sync over a Swift-provided transport ────────────────────────
 // The iOS app does CoreBluetooth; this drives the SAME oura-link OuraClient<T>
 // (auth → app stream → drain → store) over a transport that bridges to Swift, so
@@ -160,12 +261,65 @@ pub trait SyncProgressListener: Send + Sync {
     fn on_progress(&self, stage: String, bytes_left: u64, events_synced: u32);
 }
 
+/// Swift implements this to receive the beats of a live heart rate stream.
+#[uniffi::export(callback_interface)]
+pub trait LiveBeatListener: Send + Sync {
+    /// One valid beat: the heart rate from its interval, and the interval (ms).
+    fn on_beat(&self, bpm: u16, ibi_ms: u16);
+}
+
+#[derive(uniffi::Record, Clone, Copy, Debug)]
+pub struct LiveReport {
+    pub beats: u32,
+    pub seconds: f64,
+}
+
+/// The ring's latest stored readings (not a live stream).
+#[derive(uniffi::Record, Clone, Copy, Debug)]
+pub struct LatestReading {
+    pub bpm: Option<u16>,
+    pub spo2_percent: Option<u8>,
+}
+
+/// One measurement feature of the ring as it is now.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FeatureState {
+    /// `daytime_hr` | `spo2` | `exercise_hr` | `real_steps` | `cva_ppg`
+    pub feature: String,
+    /// `off` | `automatic` | `requested` | `connected_live`
+    pub mode: String,
+    /// False when the ring gave no status for the feature (not supported).
+    pub supported: bool,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct RingStatus {
+    pub battery_pct: Option<u8>,
+    /// Charge progress in percent; 0 when the ring is not on its charger.
+    pub charging_progress: Option<u8>,
+    pub features: Vec<FeatureState>,
+}
+
+fn mode_name(mode: u8) -> &'static str {
+    match mode {
+        0 => "off",
+        1 => "automatic",
+        2 => "requested",
+        3 => "connected_live",
+        _ => "?",
+    }
+}
+
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct SyncReport {
     pub serial: String,
     pub events_synced: u32,
     pub inserted: u32,
     pub next_cursor: u32,
+    /// At least one of the two clock writes at the end of the sync went out without
+    /// a link error. The ring does not answer them; the proof is its `time_sync`
+    /// event in the next drain.
+    pub clock_written: bool,
 }
 
 /// Options for [`RingSession::sync_with`].
@@ -354,6 +508,10 @@ fn should_rebase_cursor(cursor: u32, events_synced: u32, marker_present: bool) -
     cursor > 0 && events_synced == 0 && !marker_present
 }
 
+/// True only for the Ring 5 reply to a cursor that it does not accept (extended
+/// result code `0xff`). Each other result code, such as the legacy `0x11` of a
+/// Gen3 ring, is a refused request: the ring can hold the history and the saved
+/// cursor can be correct. Such an error must fail the sync and keep the cursor.
 fn is_rejected_history_cursor(error: &str) -> bool {
     error.contains("extended history request failed with result code 0xff")
 }
@@ -487,11 +645,23 @@ impl RingSession {
                 .map_err(&fail)?;
             }
         }
+
+        // Write the phone's clock to the ring on every sync. The ring logs each
+        // write as a `time_sync` event, and that event is the only link from its
+        // tick counter to UTC. Without a fresh one, a flat battery (the counter
+        // stops while the ring is off) moves every later night hours earlier.
+        // This runs after the drain is saved because a Gen3 ring can drop the
+        // link soon after a write. Best effort, like pairing: both message forms.
+        // Each write waits out the 1.5 s quiet window, so this adds about 3 s.
+        let clock_written =
+            client.sync_time().await.is_ok() | client.sync_time_app().await.is_ok();
+
         Ok(SyncReport {
             serial,
             events_synced: outcome.events_synced,
             inserted: inserted.into_inner(),
             next_cursor: outcome.next_cursor,
+            clock_written,
         })
     }
 }
@@ -644,6 +814,158 @@ impl RingSession {
         })
     }
 
+    /// Stream live heart rate until [`Self::cancel`] is called. `listener` gets
+    /// every valid beat. The ring goes back to automatic measurement before this
+    /// returns. The ring must be on a finger.
+    pub async fn live_heart_rate(
+        &self,
+        key_hex: String,
+        listener: Box<dyn LiveBeatListener>,
+    ) -> Result<LiveReport, SyncError> {
+        let fail = |e: String| SyncError::Failed(e);
+        let key =
+            parse_key(&key_hex).ok_or_else(|| fail("auth key must be 32 hex chars".into()))?;
+        let client = self.client(SyncOptions::default());
+        let cancel = self.arm_cancel();
+        client
+            .authenticate(&key)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let started = std::time::Instant::now();
+        let mut beats = 0u32;
+        // `cancel` is the stop signal, not a `select!` arm: the stream must end
+        // with its own teardown, which sets the ring back to automatic.
+        let result = client
+            .live_heart_rate_until(
+                async {
+                    let _ = cancel.await;
+                },
+                false,
+                |sample| {
+                    beats += 1;
+                    listener.on_beat(sample.bpm, sample.ibi_ms);
+                },
+            )
+            .await;
+        self.disarm_cancel();
+        result.map_err(|e| fail(e.to_string()))?;
+        Ok(LiveReport { beats, seconds: started.elapsed().as_secs_f64() })
+    }
+
+    /// Read the heart rate and the blood oxygen that the ring measured last. This
+    /// changes no setting on the ring, so it also works on a ring that drops the
+    /// link after a mode change.
+    pub async fn latest_reading(&self, key_hex: String) -> Result<LatestReading, SyncError> {
+        let fail = |e: String| SyncError::Failed(e);
+        let key =
+            parse_key(&key_hex).ok_or_else(|| fail("auth key must be 32 hex chars".into()))?;
+        let client = self.client(SyncOptions::default());
+        let cancel = self.arm_cancel();
+        let body = async {
+            client.authenticate(&key).await.map_err(|e| fail(e.to_string()))?;
+            let hr = client.feature_latest(0x02).await.map_err(|e| fail(e.to_string()))?;
+            let spo2 = client.feature_latest(0x04).await.ok();
+            Ok::<_, SyncError>(LatestReading {
+                bpm: hr.bpm.or(spo2.and_then(|s| s.bpm)),
+                spo2_percent: spo2.and_then(|s| s.spo2_percent),
+            })
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel => Err(SyncError::Cancelled("latest reading".into())),
+            r = body => r,
+        };
+        self.disarm_cancel();
+        result
+    }
+
+    /// Read the battery and the mode of each user feature. The battery read is
+    /// stored in the DB at `db_path` for the battery history.
+    pub async fn ring_status(&self, db_path: String, key_hex: String) -> Result<RingStatus, SyncError> {
+        let fail = |e: String| SyncError::Failed(e);
+        let key =
+            parse_key(&key_hex).ok_or_else(|| fail("auth key must be 32 hex chars".into()))?;
+        let client = self.client(SyncOptions::default());
+        let cancel = self.arm_cancel();
+        let body = async {
+            client.authenticate(&key).await.map_err(|e| fail(e.to_string()))?;
+            let battery = client.battery().await.ok();
+            let mut features = Vec::new();
+            for id in pair::USER_FEATURES {
+                let status = client.feature_status(id).await.ok();
+                features.push(FeatureState {
+                    feature: pair::feature_name(id).to_string(),
+                    mode: status.map_or("?", |s| mode_name(s.mode)).to_string(),
+                    supported: status.is_some(),
+                });
+            }
+            let serial = client.serial().await.ok();
+            Ok::<_, SyncError>((battery, features, serial))
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel => Err(SyncError::Cancelled("ring status".into())),
+            r = body => r,
+        };
+        self.disarm_cancel();
+        let (battery, features, serial) = result?;
+        if let (Some(battery), Some(serial)) = (battery.as_ref(), serial.as_deref()) {
+            // best effort: the status is still correct when the DB is busy
+            if let Ok(store) = Store::open(&db_path) {
+                let _ = store.insert_battery(serial, battery);
+            }
+        }
+        let db = std::path::Path::new(&db_path);
+        for f in features.iter().filter(|f| f.supported) {
+            let mode = ["off", "automatic", "requested", "connected_live"]
+                .iter()
+                .position(|m| *m == f.mode)
+                .unwrap_or(0);
+            oura_summary::write_feature_mode(db, &f.feature, mode as i64);
+        }
+        Ok(RingStatus {
+            battery_pct: battery.map(|b| b.percent),
+            charging_progress: battery.map(|b| b.charging_progress),
+            features,
+        })
+    }
+
+    /// Turn a measurement feature on (automatic) or off. A Gen3 ring can drop
+    /// the link about 2 s after it accepts the change; the change is kept.
+    pub async fn set_feature(
+        &self,
+        db_path: String,
+        key_hex: String,
+        feature: String,
+        on: bool,
+    ) -> Result<FeatureState, SyncError> {
+        let fail = |e: String| SyncError::Failed(e);
+        let key =
+            parse_key(&key_hex).ok_or_else(|| fail("auth key must be 32 hex chars".into()))?;
+        let id = pair::feature_id(&feature)
+            .filter(|id| pair::USER_FEATURES.contains(id))
+            .ok_or_else(|| fail(format!("unknown feature {feature}")))?;
+        let mode = if on { 1u8 } else { 0u8 };
+        let client = self.client(SyncOptions::default());
+        let cancel = self.arm_cancel();
+        let body = async {
+            client.authenticate(&key).await.map_err(|e| fail(e.to_string()))?;
+            client
+                .set_feature_mode(id, mode)
+                .await
+                .map_err(|e| fail(e.to_string()))
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel => Err(SyncError::Cancelled("set feature".into())),
+            r = body => r,
+        };
+        self.disarm_cancel();
+        result?;
+        oura_summary::write_feature_mode(std::path::Path::new(&db_path), &feature, mode as i64);
+        Ok(FeatureState { feature, mode: mode_name(mode).to_string(), supported: true })
+    }
+
     /// [`Self::sync_with`] with the default options.
     pub async fn sync(
         &self,
@@ -710,6 +1032,111 @@ mod tests {
         assert!(!should_rebase_cursor(0, 0, false));
     }
 
+    #[test]
+    fn refused_history_request_is_not_a_rejected_cursor() {
+        // The oura-link error for the summary tail `03 11` of a Gen3 ring. Only
+        // the Ring 5 code 0xff of the extended API starts a drain from cursor 0.
+        assert!(!is_rejected_history_cursor(
+            "legacy history request failed with result code 0x11"
+        ));
+        assert!(!is_rejected_history_cursor(
+            "extended history request failed with result code 0x11"
+        ));
+    }
+
+    /// A scripted ring. It answers a request with the frames of the longest
+    /// request prefix (hex) that matches, and it records each request.
+    struct ScriptedRing {
+        tx: broadcast::Sender<Vec<u8>>,
+        replies: Vec<(&'static str, &'static str)>,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+    impl BleWriter for ScriptedRing {
+        fn write(&self, data: Vec<u8>) {
+            let request: String = data.iter().map(|b| format!("{b:02x}")).collect();
+            let reply = self
+                .replies
+                .iter()
+                .filter(|(prefix, _)| request.starts_with(prefix))
+                .max_by_key(|(prefix, _)| prefix.len());
+            if let Some((_, frame)) = reply {
+                let bytes = (0..frame.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&frame[i..i + 2], 16).unwrap())
+                    .collect();
+                let _ = self.tx.send(bytes);
+            }
+            self.requests.lock().unwrap().push(request);
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_history_request_fails_the_sync_and_keeps_the_cursor() {
+        // Gen3 BLB_03 fw 3.4.3, 2026-09-29 02:47: the ring answered each GetEvent,
+        // also at cursor 0, with 0 events, 0 bytes left and result code 0x11. It
+        // held 6.4 MB of history. The old code set the saved cursor to 0.
+        const SERIAL: &str = "XXXXXXXXXXXXXX";
+        const CURSOR: u32 = 5_418_433;
+        let dir = std::env::temp_dir().join(format!("oura-core-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("refused.db").to_string_lossy().into_owned();
+        {
+            let store = Store::open(&db).unwrap();
+            store.upsert_device(SERIAL, None, None).unwrap();
+            store.set_cursor(SERIAL, CURSOR).unwrap();
+        }
+
+        let (tx, _) = broadcast::channel(1024);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let ring = ScriptedRing {
+            tx: tx.clone(),
+            replies: vec![
+                ("2f012b", "2f102c0e2d6a0a08c99b4365f458e6e97382"),
+                ("2f112d", "2f022e00"),
+                ("1803180010", "191100424c425f303300000000000000000000"),
+                ("1803080010", "19110058585858585858585858585858580000"),
+                ("0803000000", "091202000003040301000105000cffeeddccbbaa"),
+                ("280100", "290100"),
+                // A Gen3 ring does not have the extended API.
+                ("2f0c41", "2f020041"),
+                ("1009c1ad5200", "11080007000000000311"),
+                ("1009", "1108001f000000000311"),
+            ],
+            requests: requests.clone(),
+        };
+        let session = RingSession {
+            tx,
+            writer: Arc::new(ring),
+            cancel_tx: Mutex::new(None),
+        };
+        let err = session
+            .sync_with(
+                db.clone(),
+                "4431967d8bacc2659743142b68391d9a".into(),
+                SyncOptions { batch_events: 512 },
+                Box::new(NullProgress),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, SyncError::Failed(m)
+                if m.contains("legacy history request failed with result code 0x11")),
+            "{err}"
+        );
+        assert_eq!(Store::open(&db).unwrap().cursor(SERIAL).unwrap(), CURSOR);
+        // One GetEvent only: no marker probe and no drain from cursor 0.
+        let get_events: Vec<String> = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.starts_with("10"))
+            .cloned()
+            .collect();
+        assert_eq!(get_events, ["1009c1ad5200ffffffffff"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     struct NullWriter;
     impl BleWriter for NullWriter {
         fn write(&self, _data: Vec<u8>) {}
@@ -747,6 +1174,37 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_millis(1400));
         // cancel with nothing running is a no-op
         session.cancel();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn journal_and_restore_round_trip_over_the_ffi() {
+        let dir = std::env::temp_dir().join(format!("oura-core-data-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.db").to_string_lossy().into_owned();
+        write_demo_db(source.clone(), 3, 0).unwrap();
+        assert!(write_demo_db(source.clone(), 3, 0).is_err());
+
+        let added = journal_apply(
+            source.clone(),
+            r#"{"op":"add_tag","day":"2026-09-27","tag":"sauna"}"#.into(),
+        )
+        .unwrap();
+        assert!(added.contains("sauna"));
+        assert_eq!(journal_json(source.clone()), added);
+        assert!(journal_apply(source.clone(), r#"{"op":"nothing"}"#.into()).is_err());
+
+        // restore: every row of the source arrives in an empty DB, once
+        let restored = dir.join("restored.db").to_string_lossy().into_owned();
+        let batch = export_batch_json(source.clone(), 0, 0, 100_000);
+        let first = import_batch_json(restored.clone(), batch.clone()).unwrap();
+        assert!(first.events_inserted > 1000);
+        assert_eq!(first.events_inserted, first.events_seen);
+        assert_eq!(import_batch_json(restored.clone(), batch).unwrap().events_inserted, 0);
+
+        let csv = export_daily_csv(restored, 0).unwrap();
+        assert!(csv.starts_with("date,bedtime,wake,"));
+        assert!(csv.lines().count() >= 3);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -853,6 +853,8 @@ body.page-open { overflow: hidden; }
 .il-bm-val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
 .il-bm-val em { font-style: normal; color: var(--muted); font-size: 11px; margin-left: 4px; }
 .il-foot { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: 0.02em; }
+.il-ns { font-size: 13px; font-weight: 500; }
+.il-ns span:last-child { color: var(--muted); }
 
 /* ── daily scores (Sleep / Readiness / Activity) ─────────────────────────── */
 .scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s4); }

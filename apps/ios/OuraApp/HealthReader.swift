@@ -18,7 +18,9 @@ struct HealthReadType: @unchecked Sendable {
 }
 
 enum HealthReadTypes {
-    static let all: [HealthReadType] = {
+    /// The types the hub tools name, with fixed kinds and units. Changes in these wake
+    /// the app in the background (`HealthBackground`).
+    static let wake: [HealthReadType] = {
         var out: [HealthReadType] = []
         func q(_ kind: String, _ id: HKQuantityTypeIdentifier, _ unit: HKUnit, _ label: String) {
             if let t = HKObjectType.quantityType(forIdentifier: id) { out.append(HealthReadType(kind, t, unit: unit, label: label)) }
@@ -47,7 +49,80 @@ enum HealthReadTypes {
         return out
     }()
 
+    /// Everything the reader sends: `wake`, then every other quantity and category
+    /// type HealthKit has on this iOS version (`HealthCatalog`), then ECG. Blood
+    /// pressure and food arrive through their component quantities. The rest is read
+    /// on each run; only `wake` has observers.
+    static let all: [HealthReadType] = {
+        var out = wake
+        var seen = Set(out.map { $0.sampleType.identifier })
+        for raw in HealthCatalog.quantity {
+            guard let t = HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: raw)),
+                  seen.insert(t.identifier).inserted else { continue }
+            let unit = unit(for: t)
+            out.append(HealthReadType(kind(raw, prefix: "HKQuantityTypeIdentifier"), t, unit: unit?.0, label: unit?.1))
+        }
+        for raw in HealthCatalog.category {
+            guard let t = HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: raw)),
+                  seen.insert(t.identifier).inserted else { continue }
+            out.append(HealthReadType(kind(raw, prefix: "HKCategoryTypeIdentifier"), t))
+        }
+        out.append(HealthReadType("electrocardiogram", HKObjectType.electrocardiogramType()))
+        return out
+    }()
+
     static var objectTypes: Set<HKObjectType> { Set(all.map { $0.sampleType as HKObjectType }) }
+
+    /// `HKQuantityTypeIdentifierBodyMassIndex` → `body_mass_index`.
+    static func kind(_ raw: String, prefix: String) -> String {
+        var out = ""
+        let chars = Array(raw.dropFirst(raw.hasPrefix(prefix) ? prefix.count : 0))
+        for (i, ch) in chars.enumerated() {
+            if ch.isUppercase, i > 0 {
+                let prev = chars[i - 1]
+                let nextLower = i + 1 < chars.count && chars[i + 1].isLowercase
+                if prev.isLowercase || prev.isNumber || (prev.isUppercase && nextLower) { out.append("_") }
+            }
+            out.append(contentsOf: ch.lowercased())
+        }
+        return out
+    }
+
+    /// The unit a value of `type` is sent in: the first of a fixed list that fits the
+    /// type's dimension. Nil for a dimension the list does not have; such a sample is
+    /// sent with its time and source and no value.
+    static func unit(for type: HKQuantityType) -> (HKUnit, String)? {
+        let mass: (HKUnit, String) = type.identifier.contains("BodyMass") && !type.identifier.contains("Index")
+            ? (.gramUnit(with: .kilo), "kg") : (.gram(), "g")
+        var candidates: [(HKUnit, String)] = [
+            (.count(), "count"),
+            (HKUnit.count().unitDivided(by: .minute()), "count/min"),
+            (.kilocalorie(), "kcal"),
+            (.meter(), "m"),
+            (.second(), "s"),
+            mass,
+            (.percent(), "fraction"),
+            (.degreeCelsius(), "degC"),
+            (.millimeterOfMercury(), "mmHg"),
+            (.decibelAWeightedSoundPressureLevel(), "dBASPL"),
+            (.decibelHearingLevel(), "dBHL"),
+            (.liter(), "L"),
+            (.internationalUnit(), "IU"),
+            (HKUnit.gramUnit(with: .milli).unitDivided(by: .literUnit(with: .deci)), "mg/dL"),
+            (HKUnit.moleUnit(with: .milli, molarMass: HKUnitMolarMassBloodGlucose).unitDivided(by: .liter()), "mmol/L"),
+            (.watt(), "W"),
+            (HKUnit.meter().unitDivided(by: .second()), "m/s"),
+            (HKUnit.liter().unitDivided(by: .minute()), "L/min"),
+            (HKUnit.literUnit(with: .milli).unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute())), "ml/kg/min"),
+            (HKUnit.kilocalorie().unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .hour())), "kcal/kg/h"),
+            (.siemen(), "S"),
+            (.hertz(), "Hz"),
+            (.volt(), "V"),
+            (.lux(), "lx"),
+        ]
+        if #available(iOS 18.0, *) { candidates.append((.appleEffortScore(), "effort")) }
+        return candidates.first { type.is(compatibleWith: $0.0) }
+    }
 }
 
 /// A sample with its provenance read out, so the encoder never touches
@@ -82,6 +157,8 @@ struct HealthPage: @unchecked Sendable {
 protocol HealthReadClient: AnyObject, Sendable {
     var isAvailable: Bool { get }
     func requestRead(_ types: Set<HKObjectType>) async throws
+    /// Ask for write and read access in one sheet.
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws
     func page(_ type: HKSampleType, after anchor: HKQueryAnchor?, limit: Int) async throws -> HealthPage
     /// Ask iOS to wake the app when `type` changes.
     func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws
@@ -91,12 +168,23 @@ protocol HealthReadClient: AnyObject, Sendable {
     func observe(_ type: HKSampleType, fire: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) -> AnyObject
 }
 
+extension HealthReadClient {
+    /// One sheet for the write and the read types. A fake needs only `requestRead`.
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws {
+        try await requestRead(read)
+    }
+}
+
 final class HKReadClient: HealthReadClient, @unchecked Sendable {
     private let store = HKHealthStore()
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     func requestRead(_ types: Set<HKObjectType>) async throws {
         try await store.requestAuthorization(toShare: [], read: types)
+    }
+
+    func request(share: Set<HKSampleType>, read: Set<HKObjectType>) async throws {
+        try await store.requestAuthorization(toShare: share, read: read)
     }
 
     func enableBackgroundDelivery(_ type: HKObjectType, frequency: HKUpdateFrequency) async throws {
@@ -156,6 +244,12 @@ enum HealthSampleEncoder {
             row["unit"] = type.unitLabel ?? unit.unitString
         } else if let cs = s as? HKCategorySample {
             row["category"] = categoryLabel(type.kind, cs.value)
+        } else if let ecg = s as? HKElectrocardiogram {
+            row["category"] = "classification_\(ecg.classification.rawValue)"
+            if let hr = ecg.averageHeartRate {
+                row["value"] = hr.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                row["unit"] = "count/min"
+            }
         } else if let w = s as? HKWorkout {
             row["category"] = activityName(w.workoutActivityType)
             row["value"] = w.duration / 60
@@ -394,6 +488,26 @@ final class HealthReader: ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.enabledKey)
         dlog("health-read", "reading enabled")
         await HealthBackground.shared.start()
+    }
+
+    private static let requestedCountKey = "health.access.requested-types-v2"
+
+    /// HealthKit shows its sheet only for types it has not asked about. Call this in
+    /// the foreground: after an update that adds types, the user sees the new ones.
+    @MainActor
+    func requestNewTypesIfNeeded() async {
+        let count = HealthReadTypes.objectTypes.count
+        guard enabled, isAvailable, UserDefaults.standard.integer(forKey: Self.requestedCountKey) != count else { return }
+        do {
+            // One sheet for both directions: a read-only request left every write type
+            // turned off on the phone (2026-10-06), and the export then wrote nothing.
+            let share = HealthExporter.shared.enabled ? HealthExportEngine.shareTypes : []
+            try await client.request(share: share, read: HealthReadTypes.objectTypes)
+            UserDefaults.standard.set(count, forKey: Self.requestedCountKey)
+            dlog("health-read", "read access asked for \(count) types")
+        } catch {
+            dlog("health-read", "read access request failed: \(error.localizedDescription)")
+        }
     }
 
     @MainActor

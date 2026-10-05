@@ -251,6 +251,14 @@ struct TrendsView: View {
                           points: s.sleepHoursSeries, domain: domain, unit: "hr", decimals: 1,
                           reference: s.sleepDebt.map { ($0.need_h, "Your need") })
 
+                let deep = s.stageSeries(1), rem = s.stageSeries(3)
+                if !deep.isEmpty || !rem.isEmpty {
+                    TrendCard(title: "Deep Sleep", icon: "moon.fill", tint: Theme.deep,
+                              points: dated(deep), domain: domain, unit: "min")
+                    TrendCard(title: "REM Sleep", icon: "sparkles", tint: Theme.rem,
+                              points: dated(rem), domain: domain, unit: "min")
+                }
+
                 SectionTitle("Activity")
                 TrendCard(title: "Steps", icon: "figure.walk", tint: Theme.activity,
                           points: s.stepsSeries, domain: domain)
@@ -275,6 +283,10 @@ struct TrendsView: View {
         .navigationTitle("Trends")
         .navigationBarTitleDisplayMode(.inline)
     }
+}
+
+private func dated(_ values: [DatedVital]) -> [DatedValue] {
+    values.compactMap { v in Fmt.date(v.date).map { DatedValue(date: $0, value: v.value) } }
 }
 
 // ── the Summary card ─────────────────────────────────────────────────────────

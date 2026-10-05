@@ -1,9 +1,7 @@
-# xcodegen spec for a MODEL-FREE build of OuraApp — the CI / Xcode Cloud target.
-# No libtorch / .ptl / oura.db (all gitignored local artifacts that a clean cloud
-# checkout doesn't have), so it builds from just the repo + the Rust xcframework that
-# ci_scripts/ci_post_clone.sh rebuilds. The app shows the model-free summary and can
-# sync from a real ring over BLE; the on-device hypnogram/CVA/activity models are only
-# in the local torch build (project.yml). Generate with:
+# xcodegen spec for OuraApp: the local build and the CI / Xcode Cloud target.
+# It needs only the repo and the Rust xcframework (ci_scripts/ci_post_clone.sh
+# rebuilds it in the cloud). The app has no models and no bundled oura.db. It syncs
+# from a real ring over BLE. Generate with:
 #   xcodegen generate --spec project-ci.yml
 name: OuraApp
 options:
@@ -29,7 +27,11 @@ settings:
   base:
     MARKETING_VERSION: "0.1.1"
     CURRENT_PROJECT_VERSION: "23"
-    PRODUCT_BUNDLE_IDENTIFIER: md.thomas.openoura
+    # The base of every bundle id. A build for another team overrides this one
+    # setting on the command line (APP_BUNDLE_ID=com.example.openoura); the widget
+    # extension and the App Group follow it.
+    APP_BUNDLE_ID: md.thomas.openoura
+    APP_GROUP_ID: group.$(APP_BUNDLE_ID)
     TARGETED_DEVICE_FAMILY: "1"   # iPhone only (no iPad multitasking orientation reqs)
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_ENTITLEMENTS: OuraApp.entitlements
@@ -52,11 +54,26 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OuraApp.app/OuraApp"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  OuraWidgets:
+    type: app-extension
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).widgets
+        INFOPLIST_FILE: ../OuraWidgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: ../OuraWidgets/OuraWidgets.entitlements
+        SKIP_INSTALL: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+    sources:
+      - path: ../OuraWidgets/OuraWidgets.swift
+      - path: Snapshot.swift
   OuraApp:
     type: application
     platform: iOS
     settings:
       base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
         INFOPLIST_FILE: Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_EMIT_LOC_STRINGS: YES
@@ -67,8 +84,10 @@ targets:
       - path: OuraApp.swift
       - path: Models.swift
       - path: Core.swift
+      - path: SummaryPlugin.swift
       - path: HubPush.swift
       - path: HealthReader.swift
+      - path: HealthCatalog.swift
       - path: HealthBackground.swift
       - path: Components.swift
       - path: Reports.swift
@@ -95,9 +114,24 @@ targets:
       - path: HealthExportState.swift
       - path: HealthStoreClient.swift
       - path: HealthExporter.swift
+      - path: Units.swift
+      - path: Insights.swift
+      - path: InsightViews.swift
+      - path: Journal.swift
+      - path: Workouts.swift
+      - path: LiveHeart.swift
+      - path: RingScreen.swift
+      - path: DataTools.swift
+      - path: HealthImport.swift
+      - path: Notifier.swift
+      - path: Snapshot.swift
+      - path: SnapshotWriter.swift
+      - path: AppIntents.swift
       - path: ../generated/oura_core.swift
       - path: Assets.xcassets
     dependencies:
+      - target: OuraWidgets
+        embed: true
       - sdk: HealthKit.framework
       - sdk: BackgroundTasks.framework
       - framework: ../OuraCore.xcframework

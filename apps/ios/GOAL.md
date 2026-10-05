@@ -39,9 +39,8 @@ the existing panels:
   `build_summary()` is the single source of truth shared with the web client.
 - **BLE**: CoreBluetooth implements the `oura-link::Transport` trait (native
   permissions/background); auth + sync logic stays in Rust.
-- **ML models**: TorchScript `.ptl` (lite interpreter, bit-exact vs `.pt`) run via
-  a Swift torch runner that returns the **same `--json`** the Python runners do —
-  the model seam is unchanged, so web and iOS never diverge.
+- **No models**: the app uses the ring's own hypnogram and open estimates. An add-on
+  can supply model results through a `SummaryPlugin` (`SummaryPlugin.swift`).
 
 ## Done = 
 Feature-parity with the web dashboard, the Observatory look applied throughout,
@@ -49,25 +48,27 @@ running fully on-device on a real ring's data, sharing the Rust core so a web
 change in `build_summary()` flows to iOS with no re-implementation.
 
 ## Non-goals (v1)
-Cloud sync · accounts · Android · live realtime (`viz`/`game`) · trends screens ·
-widgets · Live Activities — all later. v1 is the offline dashboard, done beautifully,
+Cloud sync · accounts · Android · the desktop realtime tools (`viz`/`game`) ·
+Live Activities · a watchOS app. v1 is the offline dashboard, done beautifully,
 plus the OpenStrap-style essentials: on-device pairing, background sync, Apple Health.
+
+Built after v1 (see `docs/journal-and-insights.md`): trends, notifications, widgets,
+Siri, tags and correlations, reports, workouts from Apple Health, live heart rate,
+the ring page with feature switches and the finder, export and restore.
 
 ## Status (foundation built & verified on the iOS 26.4 simulator)
 - ✅ **`oura-core` UniFFI `.xcframework`** — `crates/oura-core` exposes `summary_json`/
   `quick_summary_json`/`rmssd`; bindings generated, `apps/ios/OuraCore.xcframework` built.
 - ✅ **Shared summary** — `build_summary()` extracted to `crates/oura-summary` behind a
-  `ModelRunner` trait; web (`oura-cli`, `PythonRunner`) and iOS (`NoModelRunner`) share it.
+  `ModelRunner` trait; web (`oura-cli`) and iOS share it, with `NoModelRunner` by default.
 - ✅ **SwiftUI Observatory UI** (`apps/ios/OuraApp/`) — renders the real shared summary
   (digest, vitals + sparklines, sleep timing, device health) from a bundled `oura.db`.
 - ✅ **CoreBluetooth Transport** — `oura-link` btleplug feature-gated so auth/sync compile
   for iOS; `BLETransport.swift` implements the ring link (type-checks).
 - ⏳ **Remaining (needs a ring / larger):** UniFFI async `Transport` callback + `sync()`
-  entry to drive `OuraClient` on device; on-device torch `.ptl` as a UniFFI `ModelRunner`
-  (sleep stages / CVA / activity); multi-screen nav once model data lands.
+  entry to drive `OuraClient` on device; multi-screen nav.
 
-Build: `tools/export_mobile.py` (models) · `apps/ios/OuraApp/build_run.sh` (app on sim) ·
-`apps/ios/spike/build_libtorch_ios.sh` (on-device torch runtime).
+Build: `apps/ios/OuraApp/build_run.sh` (app on sim).
 
 ## Status (OpenStrap parity, 2026-09)
 - ✅ **On-device pairing** — `PairingView` / `RingPairing`: scan (a reset ring has no

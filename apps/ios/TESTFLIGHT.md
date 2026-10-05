@@ -8,22 +8,22 @@ signing requires *your* Apple Developer account.
 - **Apple Developer Program** membership ($99/yr).
 - Register an App ID you own (the upstream project uses `md.thomas.openoura`; a fork
   needs its own, for example `com.yourname.openoura`) and create the app in App Store
-  Connect. Pass it as `PRODUCT_BUNDLE_IDENTIFIER=…` on the `xcodebuild` line or set it in
+  Connect. Pass it as `APP_BUNDLE_ID=…` on the `xcodebuild` line or set it in
   Xcode; see `README.md` in this directory.
 - Install xcodegen: `brew install xcodegen`.
 
 ## Build & upload
-Current upload version is configured as **0.1.1 (22)** in
-`OuraApp/project.yml` and `OuraApp/project-ci.yml`.
+The upload version is in `OuraApp/project-ci.yml` (`MARKETING_VERSION` and
+`CURRENT_PROJECT_VERSION`).
 
 ```bash
 # 1. shared Rust core → both device + simulator slices
 ./apps/ios/build-xcframework.sh
 
-# 2. generate the Xcode project from project.yml
-cd apps/ios/OuraApp && xcodegen generate
+# 2. generate the Xcode project from project-ci.yml
+cd apps/ios/OuraApp && xcodegen generate --spec project-ci.yml
 
-# 3. open it, set your Team under Signing & Capabilities (or DEVELOPMENT_TEAM in project.yml)
+# 3. open it, set your Team under Signing & Capabilities (or DEVELOPMENT_TEAM in project-ci.yml)
 open OuraApp.xcodeproj
 #    then: Product → Archive → Distribute App → TestFlight & App Store
 ```
@@ -44,10 +44,9 @@ xcodebuild -exportArchive -archivePath build/OuraApp.xcarchive \
 
 ## Still on you
 - **Signing**: Team ID + a distribution provisioning profile (only you can do this).
-- **Version bumps**: `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `project.yml`.
+- **Version bumps**: `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `project-ci.yml`.
 - **Data**: the app builds its own `oura.db` from the ring; no build bundles one. The
-  local `project.yml` build bundles the `.ptl` models and LibTorch; the Xcode Cloud
-  `project-ci.yml` build has neither.
+  app has no models.
 
 ## Background modes (App Review note)
 

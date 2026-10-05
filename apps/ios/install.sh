@@ -13,7 +13,6 @@
 #   TEAM_ID=ABCDE12345   your Apple team (Xcode → Settings → Accounts)
 #   BUNDLE_ID=com.you.openoura
 #   DEVICE=<name or id>  which iPhone, when more than one is connected
-#   TORCH=1              the build with the on-device models (see README)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO="$PWD"
@@ -99,13 +98,8 @@ else
 fi
 
 # ── 5. Xcode project ──
-SPEC=project-ci.yml
-if [ "${TORCH:-0}" = 1 ]; then
-  SPEC=project.yml
-  [ -d "$IOS/libtorch-xcframeworks" ] || die "TORCH=1 needs LibTorch and the models first (apps/ios/README.md, on-device models)."
-fi
-say "generating the Xcode project ($SPEC)"
-(cd "$APPDIR" && xcodegen generate --spec "$SPEC" --quiet)
+say "generating the Xcode project"
+(cd "$APPDIR" && xcodegen generate --spec project-ci.yml --quiet)
 
 # ── 6. build, install, launch ──
 say "building and signing (Xcode may ask for your Mac password to use the signing key)"
@@ -114,7 +108,7 @@ mkdir -p "$APPDIR/build"
 if ! xcodebuild -project "$APPDIR/OuraApp.xcodeproj" -scheme OuraApp \
     -destination "platform=iOS,id=$UDID" -configuration Debug \
     -derivedDataPath "$APPDIR/build/DerivedData-device" \
-    DEVELOPMENT_TEAM="$TEAM_ID" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+    DEVELOPMENT_TEAM="$TEAM_ID" APP_BUNDLE_ID="$BUNDLE_ID" \
     -allowProvisioningUpdates -allowProvisioningDeviceRegistration build > "$LOG" 2>&1; then
   grep -E "error:|No Accounts|No profiles|provisioning" "$LOG" | head -15 >&2 || true
   die "The build failed. Full log: $LOG"

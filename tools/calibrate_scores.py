@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Calibrate the score model ONCE from a trends export and persist it to
-local/score_params.json, so the live scorers never need the CSV at runtime.
+local/score_params.json, so a scorer does not need the CSV at runtime.
 
-Uses **ring-compatible** drivers only (LIVE_DRIVERS) — every input here is one the
-live scorers can compute from ring data + accumulated baselines (see build_daily.py),
-unlike the analysis-only drivers in fit_scores_all.py. The params file embeds each
-contributor's drivers + fitted curve, so the scorers stay driver-agnostic.
+Uses **ring-compatible** drivers only (LIVE_DRIVERS): a scorer can compute every
+input here from ring data + accumulated baselines, unlike the analysis-only drivers
+in fit_scores_all.py. The params file embeds each contributor's drivers + fitted
+curve, so a scorer stays driver-agnostic.
 
 Output is per-user calibration (personal physiology) → gitignored local/.
 Re-run with a fresh/longer export:  python tools/calibrate_scores.py --csv local/trends.csv

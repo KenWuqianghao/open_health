@@ -4,7 +4,7 @@ import Charts
 // Full-page, research-grade sleep & activity reports — the iOS counterpart to the web
 // dashboard's `sleepReport`/`activityReport` (see docs/clients-web-and-ios.md). The raw
 // per-night signal series arrive from build_summary (NightRow.series); the hypnogram is
-// the on-device SleepNet output (NightRow.stages, TORCH build). Sleep metrics + debt are
+// NightRow.stages (the ring's own pages, or a plugin's stages). Sleep metrics + debt are
 // computed here in Swift, mirroring crates/oura-summary so both clients agree.
 
 // ── science: hypnogram-derived metrics (mirror of oura-summary sleep_metrics) ──
@@ -246,7 +246,8 @@ struct Polysomnograph: View {
         sig("Heart rate", "bpm", s?.hr, Theme.heart)
         sig("HRV", "ms", s?.hrv, Theme.hrv)
         sig("Blood O₂", "%", s?.spo2, Theme.oxygen)
-        sig("Skin temp", "°C", s?.temp, Theme.temperature, 1, span: s?.temp_span)
+        sig("Skin temp", Units.current.temperatureUnit, s?.temp.map(Units.current.temperature),
+            Theme.temperature, 1, span: s?.temp_span)
         sig("Motion", "s", s?.motion, Theme.activity)
         return out
     }
@@ -398,13 +399,57 @@ private struct SignalCanvas: View {
     }
 }
 
+/// The vital signs of one night against the wearer's usual values.
+struct NightVitalsCard: View {
+    let s: Summary
+    let night: NightRow
+    var body: some View {
+        let rows: [(String, String, String?)] = [
+            ("Lowest heart rate", night.rhr.map { "\(Int($0)) bpm" },
+             usual(s.vitals.rhr.baseline, unit: "bpm", decimals: 0)),
+            ("HRV", night.hrv_ms.map { "\(Int($0)) ms" },
+             usual(s.vitals.hrv.baseline, unit: "ms", decimals: 0)),
+            ("Respiratory rate", night.breath.map { "\(Fmt.number($0, decimals: 1)) br/min" },
+             usual(s.vitals.breath?.baseline, unit: "br/min", decimals: 1)),
+            ("Blood oxygen", night.spo2_mean.map { "\(Int($0)) %" },
+             usual(s.vitals.spo2?.baseline, unit: "%", decimals: 0)),
+            ("Skin temperature", night.temp_dev.map { Fmt.temperatureDelta($0) },
+             night.skin_temp.map { Fmt.temperature($0) }),
+        ].compactMap { row in row.1.map { (row.0, $0, row.2) } }
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                CardHeader(title: "Night Vitals", icon: "heart.text.square.fill", tint: Theme.heart)
+                ForEach(Array(rows.enumerated()), id: \.element.0) { i, row in
+                    if i > 0 { Divider() }
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(row.0).font(.subheadline)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(row.1).font(.subheadline.weight(.semibold)).monospacedDigit()
+                            if let note = row.2 {
+                                Text(note).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .card()
+        }
+    }
+
+    private func usual(_ baseline: Double?, unit: String, decimals: Int) -> String? {
+        baseline.map { "usual \(Fmt.number($0, decimals: decimals)) \(unit)" }
+    }
+}
+
 // stage-proportion bar (Deep/Core/REM/Awake)
 private struct StageBar: View {
     let n: NightRow
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 2) {
-                ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
+                ForEach(n.stageShares, id: \.0) { code, pct in
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(Theme.stage(code))
                         .frame(width: max(0, geo.size.width * CGFloat((pct ?? 0) / 100) - 2))
@@ -486,6 +531,10 @@ struct SleepDebtCard: View {
 // breathing / lowest HR / HRV / temperature sit from normal.
 struct IllnessCard: View {
     let illness: IllnessResult
+    /// True when the rule-based check made the result, not the on-device model.
+    var fromRules = false
+    /// The resting heart-rate alert (NightSignal), shown under the biomarkers.
+    var nightSignal: NightSignal? = nil
     private static let copy = [
         "NO_SIGNS": "No signs of illness. Your biometrics are within your normal range.",
         "MINOR_SIGNS": "A few biometrics have drifted outside your usual range. Worth an easy day.",
@@ -513,11 +562,12 @@ struct IllnessCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             CardHeader(title: "Symptom Radar", icon: "dot.radiowaves.left.and.right", tint: tint,
-                       detail: illness.available ? "\(illness.daysWithData) of 30 days" : nil)
+                       detail: illness.available ? "\(illness.daysWithData) of \(fromRules ? 28 : 30) days" : nil)
             if !illness.available {
                 Text(illness.status == "MISSING_LAST_NIGHT_SLEEP"
                      ? "Wear the ring overnight and sync — last night's data is missing."
-                     : "Needs more recent nights (at least 7 of the last 14).")
+                     : (fromRules ? "Needs 7 nights for your usual range."
+                        : "Needs more recent nights (at least 7 of the last 14)."))
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 12) {
@@ -534,16 +584,55 @@ struct IllnessCard: View {
                     ForEach(Self.order, id: \.self) { type in
                         if let b = byType[type] {
                             BiomarkerRow(name: Self.bmName[type] ?? type,
-                                         unit: Self.bmUnit[type] ?? "",
+                                         unitText: Self.bmUnit[type] ?? "",
                                          b: b, tint: tint)
                         }
                     }
                 }
-                Text("Checked \(Fmt.monthDay(illness.date)) against your own recent nights")
+                if let ns = nightSignal {
+                    Divider()
+                    NightSignalRow(signal: ns)
+                }
+                Text("Checked \(Fmt.monthDay(illness.date)) against your own recent nights"
+                     + (fromRules ? ". A check by rules, not a diagnosis." : ""))
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .card()
+    }
+}
+
+// NightSignal: last night's resting heart rate against the median of all earlier
+// nights. Two raised nights in a row give yellow (+3 bpm) or red (+4 bpm).
+private struct NightSignalRow: View {
+    let signal: NightSignal
+    private var tint: Color {
+        switch signal.alert {
+        case "red": return Theme.alert
+        case "yellow": return Theme.caution
+        default: return Theme.good
+        }
+    }
+    private var text: String {
+        switch signal.alert {
+        case "red": return "Raised 4 bpm or more for two nights in a row."
+        case "yellow": return "Raised 3 bpm or more for two nights in a row."
+        default: return "No sustained rise."
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle().fill(tint).frame(width: 8, height: 8)
+                Text("Resting heart rate").font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(signal.rhr) bpm").font(.subheadline.weight(.semibold)).monospacedDigit()
+                Text("usual \(signal.baseline)").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Text(text + " NightSignal, Mishra et al. 2022.")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -564,16 +653,20 @@ private struct RadarBlip: View {
 // one biomarker: name, a value dot placed on its personal baseline band, and the value.
 private struct BiomarkerRow: View {
     let name: String
-    let unit: String
+    let unitText: String
     let b: IllnessBiomarker
     let tint: Color
     private var dotColor: Color {
         guard b.indicatesSymptoms else { return .primary }
         return b.reason == "ELEVATED" ? Theme.alert : Theme.caution
     }
-    private func fmt(_ v: Double) -> String {
-        abs(v) < 10 && v != v.rounded() ? String(format: "%.1f", v) : String(Int(v.rounded()))
+    /// Temperature is a difference in °C in the data; show it in the chosen unit.
+    private var isTemperature: Bool { b.type == "TemperatureDeviation" }
+    private func fmt(_ raw: Double) -> String {
+        let v = isTemperature ? Units.current.temperatureDelta(raw) : raw
+        return abs(v) < 10 && v != v.rounded() ? String(format: "%.1f", v) : String(Int(v.rounded()))
     }
+    private var unit: String { isTemperature ? Units.current.temperatureUnit : unitText }
     var body: some View {
         HStack(spacing: 12) {
             Text(name).font(.subheadline).foregroundStyle(.secondary)
@@ -811,7 +904,7 @@ struct SleepReport: View {
                 if n.hasHypnogram {
                     StageBar(n: n).padding(.top, 4).reveal(delay: 0.2)
                     HStack(spacing: 14) {
-                        ForEach([(1, n.deep_pct), (2, n.light_pct), (3, n.rem_pct), (4, n.wake_pct)], id: \.0) { code, pct in
+                        ForEach(n.stageShares, id: \.0) { code, pct in
                             HStack(spacing: 5) {
                                 Circle().fill(Theme.stage(code)).frame(width: 8, height: 8)
                                 Text(Theme.stageName(code)).foregroundStyle(.secondary)
@@ -823,6 +916,24 @@ struct SleepReport: View {
                 }
             }
             .card()
+
+            NightVitalsCard(s: s, night: n)
+
+            let naps = s.naps(forDay: day)
+            if !naps.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    CardHeader(title: naps.count == 1 ? "Nap" : "Naps", icon: "sun.max.fill", tint: Theme.sleep,
+                               detail: Fmt.minutesText(naps.compactMap(\.in_bed_h).reduce(0, +) * 60))
+                    ForEach(Array(naps.enumerated()), id: \.element.id) { i, nap in
+                        if i > 0 { Divider() }
+                        StatRow(label: "\(Fmt.clock(nap.start)) – \(Fmt.clock(nap.end))",
+                                value: nap.in_bed_h.map { Fmt.minutesText($0 * 60) } ?? "—")
+                    }
+                    Text("A nap counts for your sleep debt. It does not change the scores of the night.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .card()
+            }
 
             if n.hasHypnogram {
                 VStack(alignment: .leading, spacing: 10) {
@@ -978,7 +1089,7 @@ struct ActivityReport: View {
             }
             if let d = st?.distance_m {
                 Divider()
-                StatRow(label: "Distance", value: String(format: "%.1f km", d / 1000))
+                StatRow(label: "Distance", value: Fmt.distance(meters: d))
             }
         }
         .card()
@@ -999,16 +1110,21 @@ struct ActivityReport: View {
         }
         .card()
 
-        let ws = s.workoutsOn(day)
+        let ws = s.mergedWorkouts(on: day)
         VStack(alignment: .leading, spacing: 8) {
             CardHeader(title: "Workouts", icon: "figure.run", tint: Theme.activity,
                        detail: ws.isEmpty ? nil : "\(ws.count)")
+            if s.restMode?.value?.days.contains(day) == true {
+                Label("Rest mode: this day has no Activity score.", systemImage: "leaf.fill")
+                    .font(.subheadline).foregroundStyle(Theme.good)
+            }
             if ws.isEmpty {
-                Text("No workouts detected this day.").font(.subheadline).foregroundStyle(.secondary)
+                Text("No workouts this day.").font(.subheadline).foregroundStyle(.secondary)
             } else {
                 ForEach(Array(ws.enumerated()), id: \.element.id) { i, w in
                     if i > 0 { Divider() }
-                    SessionRow(label: w.label, durationMin: w.durationMin, startHM: w.startHM)
+                    NavigationLink(value: Route.workout(w.id)) { WorkoutRow(w: w) }
+                        .buttonStyle(.pressable)
                 }
             }
         }

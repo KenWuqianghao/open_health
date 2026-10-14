@@ -90,6 +90,19 @@ final class HealthReaderTests: XCTestCase {
         XCTAssertEqual(HealthSampleEncoder.activityName(.traditionalStrengthTraining), "strength_training")
     }
 
+    func testEachWorkoutTypeHasAName() {
+        XCTAssertEqual(HealthImport.label(.paddleSports), "Paddle sports")
+        XCTAssertEqual(HealthImport.label(.highIntensityIntervalTraining), "HIIT")
+        XCTAssertEqual(activitySymbol(HealthImport.label(.paddleSports)), "oar.2.crossed")
+        XCTAssertEqual(activitySymbol(HealthImport.label(.stairClimbing)), "figure.stair.stepper")
+        // HealthKit raw values 1...84 hold every type before `.other`; none shows as a number
+        for raw in UInt(1)...84 {
+            guard let type = HKWorkoutActivityType(rawValue: raw) else { continue }
+            let name = HealthSampleEncoder.activityName(type)
+            XCTAssertNil(name.rangeOfCharacter(from: .decimalDigits), "type \(raw) has the name \(name)")
+        }
+    }
+
     func testEnginePagesExcludesOwnSourceAndAdvancesAnchors() async {
         let client = FakeHealthReadClient()
         let a1 = HKQueryAnchor(fromValue: 1), a2 = HKQueryAnchor(fromValue: 2)

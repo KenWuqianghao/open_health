@@ -130,11 +130,11 @@ final class HealthImport: ObservableObject {
         return out
     }
 
-    /// "traditional_strength_training" → "Strength training".
+    /// The display name of a workout type: `.paddleSports` → "Paddle sports".
     nonisolated static func label(_ type: HKWorkoutActivityType) -> String {
         let raw = HealthSampleEncoder.activityName(type).replacingOccurrences(of: "_", with: " ")
-        let short = raw.replacingOccurrences(of: "traditional ", with: "")
-        return short.prefix(1).uppercased() + short.dropFirst()
+        if raw == "hiit" { return "HIIT" }
+        return raw.prefix(1).uppercased() + raw.dropFirst()
     }
 
     private func notOurs() -> NSPredicate {

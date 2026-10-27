@@ -36,6 +36,49 @@ pub struct ExternalValue {
     pub source: String,
 }
 
+/// An Apple Watch sleep stage. Apple's "core" is light sleep.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepStage {
+    Deep,
+    Core,
+    Rem,
+    Awake,
+}
+
+impl SleepStage {
+    /// The hypnogram code the ring uses: 1 deep, 2 light, 3 REM, 4 awake.
+    pub fn code(self) -> i64 {
+        match self {
+            SleepStage::Deep => 1,
+            SleepStage::Core => 2,
+            SleepStage::Rem => 3,
+            SleepStage::Awake => 4,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ExternalSleepStage {
+    pub start_unix: i64,
+    pub end_unix: i64,
+    pub stage: SleepStage,
+}
+
+/// Apple Watch sleep: the stage intervals, and the heart rate and HRV samples taken
+/// during them.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+pub struct ExternalSleep {
+    #[serde(default)]
+    pub stages: Vec<ExternalSleepStage>,
+    /// `[unix, bpm]`
+    #[serde(default)]
+    pub hr: Vec<(i64, f64)>,
+    /// `[unix, ms]`, SDNN as the Watch measures it.
+    #[serde(default)]
+    pub hrv_sdnn: Vec<(i64, f64)>,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct External {
     #[serde(default)]
@@ -43,6 +86,8 @@ pub struct External {
     /// Measured VO2 max in ml/kg/min.
     #[serde(default)]
     pub vo2max: Option<ExternalValue>,
+    #[serde(default)]
+    pub sleep: ExternalSleep,
 }
 
 pub fn external_path(db: &Path) -> PathBuf {

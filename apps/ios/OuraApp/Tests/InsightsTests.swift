@@ -139,7 +139,9 @@ final class InsightsTests: XCTestCase {
         let payload = HealthImport.payload(
             workouts: [.init(id: "A", start: start, end: start.addingTimeInterval(1800), label: "Running",
                              activeKcal: 301.26, distanceM: 5012.4, avgHR: 151.6, maxHR: nil, source: "Apple Watch")],
-            vo2max: .init(value: 44.62, at: start, source: "Apple Watch"))
+            vo2max: .init(value: 44.62, at: start, source: "Apple Watch"),
+            sleep: .init(stages: [.init(start: start, end: start.addingTimeInterval(1800), stage: "deep")],
+                         hr: [.init(at: start, value: 51.04)], hrvSDNN: []))
         let workout = try XCTUnwrap((payload["workouts"] as? [[String: Any]])?.first)
         XCTAssertEqual(workout["start_unix"] as? Int, 1_790_000_000)
         XCTAssertEqual(workout["end_unix"] as? Int, 1_790_001_800)
@@ -147,6 +149,11 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(workout["avg_hr"] as? Double, 152)
         XCTAssertNil(workout["max_hr"])
         XCTAssertEqual((payload["vo2max"] as? [String: Any])?["value"] as? Double, 44.6)
+        let sleep = try XCTUnwrap(payload["sleep"] as? [String: Any])
+        let stage = try XCTUnwrap((sleep["stages"] as? [[String: Any]])?.first)
+        XCTAssertEqual(stage["end_unix"] as? Int, 1_790_001_800)
+        XCTAssertEqual(stage["stage"] as? String, "deep")
+        XCTAssertEqual((sleep["hr"] as? [[Any]])?.first?.last as? Double, 51)
         XCTAssertTrue(JSONSerialization.isValidJSONObject(payload))
     }
 

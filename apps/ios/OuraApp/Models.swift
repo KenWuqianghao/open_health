@@ -99,11 +99,15 @@ struct ScoreContributor: Codable, Identifiable {
     var source: String
     var id: String { key }
 }
+enum ScoreSource: String, Codable {
+    case appleWatch = "apple_watch"
+}
 struct DailyScore: Codable {
     var score: Double
     var contributors: [ScoreContributor] = []
     var provisional: Bool = false
     var basis: String?
+    var source: ScoreSource?
 }
 /// The three scores of one wake date. Any of them can be missing.
 struct DayScores: Codable {
@@ -311,6 +315,7 @@ extension Summary {
     var days: [String] {
         var set = Set(activity_profile.keys)
         for n in nights { if let w = wakeYmd(n) { set.insert(w) } }
+        if let scored = scores?.days.keys { set.formUnion(scored) }
         return set.sorted(by: >)
     }
 

@@ -37,6 +37,7 @@ metric there once and both clients receive it in the JSON.
 | Feature | Web (`app.js`) | iOS (`OuraApp.swift`) | Data (JSON key) | Model |
 | --- | --- | --- | --- | --- |
 | **Sleep / Readiness / Activity scores** | `renderScores` | `ScoresCard` → `ScoreDetailView` | `scores.days[ymd].{sleep,readiness,activity}` | none (`oura-analysis::scores`; see open_oura `docs/algorithms/live-scores.md`) |
+| **Apple Watch sleep score** (a morning without a ring night) | `renderScores` ⌚ mark, `openScore` text | `ScoresCard` Watch icon, `ScoreDetailView` text | `scores.days[ymd].{sleep,readiness}.source = "apple_watch"`, from `external.json` `sleep` (iOS `HealthImport`) | none |
 | **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`stage_source: ring`) | none (`sleep_phase_data` 0x5a pages) |
 | Digest headline | `load()` digest | `RootView` digest | `digest` | — |
 | Vitals (HRV/RHR/temp/SpO₂) | `renderTiles` / `VitalCell`-like | `VitalCell` | `vitals`, `nights[]` | — |

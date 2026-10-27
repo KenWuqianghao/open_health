@@ -196,7 +196,7 @@ function renderScores(d) {
     const band = sc ? scoreBand(sc.score) : null;
     provisional ||= !!sc?.provisional;
     btn.innerHTML = `${scoreRingSvg(sc?.score)}
-      <span class="score-name">${kind.name}${sc?.provisional ? " ·" : ""}</span>
+      <span class="score-name">${kind.name}${sc?.source === "apple_watch" ? " ⌚" : ""}${sc?.provisional ? " ·" : ""}</span>
       <span class="score-band ${band ? band.kind : ""}">${band ? band.label : "No data"}</span>`;
     btn.setAttribute("aria-label", `${kind.name} score ${sc ? Math.round(sc.score) : "not available"}`);
     if (sc) btn.addEventListener("click", () => openScore(kind, found.ymd, sc));
@@ -231,7 +231,9 @@ function openScore(kind, ymd, sc) {
         <div class="contrib-bar"><i style="width:${Math.max(2, Math.min(100, c.score))}%; opacity:${(0.45 + 0.55 * Math.min(1, c.weight * 3)).toFixed(2)}"></i></div>
         <div class="contrib-src">${Math.round(c.weight * 100)}% of the score · ${esc(c.source)}</div>
       </div>`).join("")}</div>
-    <p class="subhead">About</p><p class="sd-copy">Estimates from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them.</p>
+    <p class="subhead">About</p><p class="sd-copy">${sc.source === "apple_watch"
+      ? "Computed from your Apple Watch's sleep stages, heart rate and HRV, because the ring has no night for this day. Apple's own sleep score uses a different formula."
+      : "Estimates from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them."}</p>
   </form>`;
   dlg.showModal();
 }
@@ -294,6 +296,7 @@ function dayKeys(d) {
   Object.keys(d.activity_profile || {}).forEach((k) => set.add(k));
   Object.keys(d.activity_daily || {}).forEach((k) => set.add(k));
   (d.activity || []).forEach((s) => { const y = (s.start || "").split(" ")[0]; if (y) set.add(y); });
+  Object.keys(d.scores?.days || {}).forEach((k) => set.add(k));
   return [...set].filter(Boolean).sort().reverse();
 }
 

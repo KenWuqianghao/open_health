@@ -355,13 +355,14 @@ struct ProfileSettingsView: View {
                 }
 
                 Section {
-                    Toggle("Use workouts from Apple Health", isOn: Binding(
+                    Toggle("Use workouts and sleep from Apple Health", isOn: Binding(
                         get: { healthImport.enabled },
                         set: { on in Task { await healthImport.setEnabled(on); onSaved() } }
                     ))
                     if healthImport.enabled {
                         if let at = healthImport.status.lastRunAt {
                             Text("\(healthImport.status.workouts) workout(s) of the last \(HealthImport.lookBackDays) days"
+                                 + ", \(healthImport.status.sleepStages) sleep stage(s)"
                                  + (healthImport.status.vo2max.map { ", VO₂ max \(String(format: "%.1f", $0))" } ?? "")
                                  + " · read \(Self.when.string(from: at))")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -373,7 +374,7 @@ struct ProfileSettingsView: View {
                 } header: {
                     Text("Apple Watch and other apps")
                 } footer: {
-                    Text("Workouts and the measured VO₂ max from your Apple Watch or another app show in the app and count for your activity. What Open Oura wrote to Health itself is left out.")
+                    Text("Workouts and the measured VO₂ max from your Apple Watch or another app show in the app and count for your activity. Apple Watch sleep gives the scores of a morning without a ring night. What Open Oura wrote to Health itself is left out.")
                 }
 
                 Section {

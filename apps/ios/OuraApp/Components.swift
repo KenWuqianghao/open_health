@@ -761,6 +761,12 @@ struct ScoresCard: View {
                                 HStack(spacing: 4) {
                                     Text(kind.title).font(.subheadline.weight(.semibold))
                                         .lineLimit(1).minimumScaleFactor(0.7)
+                                    if hit?.score.source == .appleWatch {
+                                        Image(systemName: "applewatch")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .accessibilityLabel("from Apple Watch")
+                                    }
                                     if hit?.score.provisional == true {
                                         Image(systemName: "circle.dotted")
                                             .font(.caption2)
@@ -857,7 +863,9 @@ struct ScoreDetailView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("About").font(.headline)
                     Text(kind.blurb).font(.subheadline).foregroundStyle(.secondary)
-                    Text("Estimates computed on this iPhone from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them.")
+                    Text(score?.source == .appleWatch
+                         ? "Computed on this iPhone from your Apple Watch's sleep stages, heart rate and HRV, because the ring has no night for this day. Apple's own sleep score uses a different formula."
+                         : "Estimates computed on this iPhone from ring data. They follow Oura's contributor sets and weights, not its exact curves, so expect them to track Oura's numbers rather than match them.")
                         .font(.caption).foregroundStyle(.tertiary)
                         .padding(.top, 4)
                 }

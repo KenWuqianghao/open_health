@@ -762,8 +762,7 @@ struct RootView: View {
                 IdleTimerLock.refreshIfHeld("models")
                 requestAutomaticSync()
                 HealthExporter.shared.schedule(.foreground)
-                Task { await HealthReader.shared.requestNewTypesIfNeeded() }
-                importFromHealth()
+                refreshHealthAccessThenImport()
             }
         }
         // A sync that completed elsewhere (background, restore wake) refreshes the
@@ -804,6 +803,14 @@ struct RootView: View {
     }
 
     /// New workouts or a new VO2 max in Apple Health change the summary.
+    private func refreshHealthAccessThenImport() {
+        Task {
+            await HealthReader.shared.requestNewTypesIfNeeded()
+            await HealthImport.shared.requestNewTypesIfNeeded()
+            importFromHealth()
+        }
+    }
+
     private func importFromHealth() {
         Task {
             if await HealthImport.shared.run() { load(force: true, clearCurrent: false) }

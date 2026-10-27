@@ -20,6 +20,7 @@ pub mod health_export;
 pub mod journal;
 mod nights;
 mod ring_time;
+mod watch_sleep;
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -903,8 +904,23 @@ fn activity_day_stats(
     days
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum NightSource {
+    Ring,
+    AppleWatch,
+}
+
+fn keep_longest_night(seeds: &mut Vec<ScoreSeed>, seed: ScoreSeed) {
+    if seeds.iter().any(|s| s.wake_day == seed.wake_day && s.in_bed_s >= seed.in_bed_s) {
+        return;
+    }
+    seeds.retain(|s| s.wake_day != seed.wake_day);
+    seeds.push(seed);
+}
+
 /// The per-night inputs the readiness scorer needs, keyed by wake date.
 struct ScoreSeed {
+    source: NightSource,
     wake_day: i64,
     in_bed_s: f64,
     sleep: Option<scores::Score>,
@@ -1447,13 +1463,10 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             hrv_baseline,
             age: demo.age,
         });
-        // A nap must not overwrite the main sleep's morning: the longest night wins.
-        let longer_seed_exists = score_seeds
-            .iter()
-            .any(|seed| seed.wake_day == wake_day && seed.in_bed_s >= in_bed_s);
-        if !longer_seed_exists {
-            score_seeds.retain(|seed| seed.wake_day != wake_day);
-            score_seeds.push(ScoreSeed {
+        keep_longest_night(
+            &mut score_seeds,
+            ScoreSeed {
+                source: NightSource::Ring,
                 wake_day,
                 in_bed_s,
                 sleep: night_sleep_score.clone(),
@@ -1467,8 +1480,8 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
                 },
                 temp_baseline,
                 recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
-            });
-        }
+            },
+        );
         let temp_dev = match (night_temp_all[ni], temp_baseline) {
             (Some(t), Some(b)) => Some(((t - b.mean) * 100.0).round() / 100.0),
             _ => None,
@@ -1555,6 +1568,57 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             "sleep_score": night_sleep_score.as_ref().map(|s| s.score),
         }));
     }
+    let external = external::read_external(db);
+    let watch_nights = watch_sleep::nights(&external.sleep);
+    let watch_rhr: Vec<Option<f64>> = watch_nights.iter().map(|n| n.min_hr).collect();
+    let watch_hrv: Vec<Option<f64>> = watch_nights.iter().map(|n| n.mean_hrv_sdnn_ms).collect();
+    for (wi, wn) in watch_nights.iter().enumerate() {
+        let wake_day = (wn.end_unix + tz * 3600).div_euclid(86_400);
+        if watch_sleep::ring_recorded(wn, night_facts.iter().map(|n| (n.start_unix, n.end_unix))) {
+            continue;
+        }
+        let in_bed_s = (wn.end_unix - wn.start_unix) as f64;
+        let (metrics, asleep_s) = sleep_metrics(&wn.stages, in_bed_s);
+        *asleep_by_day.entry(wake_day).or_default() += asleep_s;
+        let share = |code: i64| {
+            let n = wn.stages.iter().filter(|&&c| c == code).count();
+            (n as f64 / wn.stages.len() as f64 * 1000.0).round() / 10.0
+        };
+        let rhr_baseline = trailing(&watch_rhr, wi);
+        let hrv_baseline = trailing(&watch_hrv, wi);
+        let sleep = scores::sleep::score_night(scores::sleep::NightInput {
+            asleep_min: Some(asleep_s as f64 / 60.0),
+            in_bed_min: Some(in_bed_s / 60.0),
+            efficiency_pct: Some(100.0 - share(4)),
+            onset_latency_min: None,
+            waso_min: metrics["waso_min"].as_f64(),
+            awakenings: metrics["awakenings"].as_f64(),
+            deep_pct: Some(share(1)),
+            rem_pct: Some(share(3)),
+            rhr: wn.min_hr,
+            rhr_baseline,
+            hrv_ms: wn.mean_hrv_sdnn_ms,
+            hrv_baseline,
+            age: demo.age,
+        });
+        keep_longest_night(
+            &mut score_seeds,
+            ScoreSeed {
+                source: NightSource::AppleWatch,
+                wake_day,
+                in_bed_s,
+                sleep,
+                rhr: wn.min_hr,
+                rhr_baseline,
+                hrv: wn.mean_hrv_sdnn_ms,
+                hrv_baseline,
+                temp_deviation: None,
+                temp_baseline: None,
+                recovery: None,
+            },
+        );
+    }
+
     extras::mark_main(&mut night_facts);
     for (night, fact) in nights_json.iter_mut().zip(&night_facts) {
         night["kind"] = json!(if fact.main { "main" } else { "nap" });
@@ -1658,7 +1722,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         })
         .collect();
     let journal = journal::read_journal(db);
-    let external = external::read_external(db);
     let rest_days = journal.rest_days(today_idx);
     let beats = extras::daytime_beats(&events, unix_s_at, &night_facts, anchor_unix as f64);
     // The activity model's sessions when a runner gave them, else bouts from the
@@ -1763,9 +1826,18 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             recovery_fraction: seed.recovery,
             activity_balance_ratio: activity_balance_ratio.filter(|_| !resting),
         });
+        let mut sleep = score_json(&seed.sleep);
+        let mut readiness = score_json(&readiness);
+        if seed.source == NightSource::AppleWatch {
+            for score in [&mut sleep, &mut readiness] {
+                if let Value::Object(fields) = score {
+                    fields.insert("source".into(), json!("apple_watch"));
+                }
+            }
+        }
         let entry = score_days.entry(day).or_default();
-        entry.insert("sleep".into(), score_json(&seed.sleep));
-        entry.insert("readiness".into(), score_json(&readiness));
+        entry.insert("sleep".into(), sleep);
+        entry.insert("readiness".into(), readiness);
     }
     for (&day, stats) in &day_stats {
         if stats.minutes < 30 || rest_days.contains(&day) {
@@ -2091,6 +2163,51 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_nights_score_the_mornings_without_a_ring_night() {
+        let dir = std::env::temp_dir().join(format!("oura-summary-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("oura.db");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let today = (now + 7200) / 86_400;
+        let ring_end = now - 4 * 86_400;
+        demo::write_demo(&db, &demo::DemoOptions { days: 20, end_unix: ring_end, tz: 2, seed: 7 }).unwrap();
+
+        let mut sleep = external::ExternalSleep::default();
+        for day in today - 20..=today {
+            let h = 3600;
+            let local_midnight = day * 86_400 - 2 * h;
+            let bed = local_midnight - h;
+            for (a, b, stage) in [
+                (0, h, external::SleepStage::Deep),
+                (h, 3 * h, external::SleepStage::Core),
+                (3 * h, 4 * h, external::SleepStage::Rem),
+                (4 * h, 4 * h + 600, external::SleepStage::Awake),
+                (4 * h + 600, 8 * h, external::SleepStage::Core),
+            ] {
+                sleep.stages.push(external::ExternalSleepStage { start_unix: bed + a, end_unix: bed + b, stage });
+            }
+            sleep.hr.push((bed + 2 * h, 50.0 + (day % 3) as f64));
+            sleep.hrv_sdnn.push((bed + 3 * h, 45.0 + (day % 4) as f64));
+        }
+        let mut ext = external::read_external(&db);
+        ext.sleep = sleep;
+        external::write_external(&db, &serde_json::to_value(&ext).unwrap()).unwrap();
+
+        let s = build_summary(&db, 2, &NoModelRunner).unwrap();
+        let days = &s["scores"]["days"];
+        for day in today - 2..=today {
+            let d = &days[extras::ymd(day)];
+            assert_eq!(d["sleep"]["source"], "apple_watch", "{}: {d}", extras::ymd(day));
+            assert!(d["sleep"]["score"].as_f64().is_some_and(|x| x > 60.0), "{d}");
+            assert_eq!(d["readiness"]["source"], "apple_watch", "{d}");
+        }
+        let ring_day = &days[extras::ymd((ring_end + 7200) / 86_400 - 2)];
+        assert!(ring_day["sleep"]["score"].is_number(), "{ring_day}");
+        assert!(ring_day["sleep"]["source"].is_null(), "the ring night wins: {ring_day}");
+        assert_eq!(s["scores"]["latest"], extras::ymd(today));
+    }
 
     #[test]
     fn demo_history_fills_every_section() {

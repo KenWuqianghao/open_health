@@ -63,34 +63,69 @@ say "team $TEAM_ID, bundle id $BUNDLE_ID"
 JSON=$(mktemp)
 trap 'rm -f "$JSON"' EXIT
 xcrun devicectl list devices --json-output "$JSON" >/dev/null 2>&1 || die "devicectl failed. Is Xcode 15 or newer selected?"
-# One line per paired iPhone/iPad that is reachable: coredevice-id|udid|name
+# One line per real iPhone/iPad that is reachable: coredevice-id|udid|name|pairing|developer mode
 PHONES=$(/usr/bin/python3 - "$JSON" "${DEVICE:-}" <<'PY'
 import json, sys
 want = sys.argv[2].lower()
 for d in json.load(open(sys.argv[1]))["result"]["devices"]:
     h, c, p = d["hardwareProperties"], d["connectionProperties"], d["deviceProperties"]
-    if h.get("platform") != "iOS" or c.get("pairingState") != "paired" or c.get("tunnelState") == "unavailable":
+    if h.get("platform") != "iOS" or h.get("reality") != "physical" or c.get("tunnelState") == "unavailable":
         continue
     if want and want not in (d["identifier"].lower(), h.get("udid", "").lower(), p.get("name", "").lower()):
         continue
-    print(f'{d["identifier"]}|{h.get("udid", "")}|{p.get("name", "")}|{p.get("developerModeStatus", "")}')
+    print(f'{d["identifier"]}|{h.get("udid", "")}|{p.get("name", "")}|{c.get("pairingState", "")}|{p.get("developerModeStatus", "")}')
 PY
 )
 if [ -z "$PHONES" ]; then
-  die "No iPhone found. Connect it with a cable, unlock it, tap Trust, and turn on Settings → Privacy & Security → Developer Mode."
+  die "No iPhone found. Connect it with its cable and unlock it, then run this again."
 fi
 if [ "$(printf '%s\n' "$PHONES" | wc -l)" -gt 1 ]; then
   warn "More than one iPhone is connected:"
   printf '%s\n' "$PHONES" | cut -d'|' -f3 | sed 's/^/     /' >&2
   die "Pick one with DEVICE=\"<name>\" $0"
 fi
-IFS='|' read -r CORE_ID UDID PHONE_NAME DEVMODE <<< "$PHONES"
-[ "$DEVMODE" = "enabled" ] || die "Turn on Developer Mode on \"$PHONE_NAME\": Settings → Privacy & Security → Developer Mode, then restart the phone."
+IFS='|' read -r CORE_ID UDID PHONE_NAME PAIRING DEVMODE <<< "$PHONES"
+
+if [ "$PAIRING" != "paired" ]; then
+  say "\"$PHONE_NAME\" does not trust this Mac yet"
+  say "on the iPhone: unlock it, tap Trust when it asks \"Trust This Computer?\", and enter the passcode"
+  xcrun devicectl manage pair --device "$CORE_ID" >/dev/null 2>&1 \
+    || die "The iPhone did not confirm. Unlock it, unplug the cable and plug it in again, then run this again. Tap Trust when the iPhone asks."
+  say "\"$PHONE_NAME\" trusts this Mac"
+  DEVMODE=$(xcrun devicectl list devices --json-output - 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+for d in json.load(sys.stdin)["result"]["devices"]:
+    if d["identifier"] == sys.argv[1]: print(d["deviceProperties"].get("developerModeStatus", ""))
+' "$CORE_ID" || true)
+fi
+
+if [ "$DEVMODE" != "enabled" ]; then
+  die "Turn on Developer Mode on \"$PHONE_NAME\", then run this again:
+     1. Keep the iPhone unlocked on the cable. If the switch in step 3 is not there,
+        open Xcode → Window → Devices and Simulators and wait until the iPhone shows.
+     2. Close Settings fully on the iPhone (swipe it away in the app switcher).
+     3. Settings → Privacy & Security → Developer Mode (at the bottom) → on → Restart.
+     4. After the restart, unlock the iPhone, tap Turn On, and enter the passcode."
+fi
 say "iPhone: $PHONE_NAME"
 if [ "$CHECK" = 1 ]; then say "ready to install (run without --check)"; exit 0; fi
 
 # ── 4. Rust core ──
-if [ ! -d "$IOS/OuraCore.xcframework" ] || [ -n "$(find "$REPO/crates" "$REPO/Cargo.lock" -newer "$IOS/OuraCore.xcframework" -type f -print -quit 2>/dev/null)" ]; then
+# Every local crate that cargo builds: the workspace, and the [patch] paths into
+# ../open_oura during local work. Git dependencies change only through Cargo.lock.
+CRATE_DIRS=$(cargo metadata --format-version 1 --manifest-path "$REPO/Cargo.toml" 2>/dev/null | /usr/bin/python3 -c '
+import json, os, sys
+for p in json.load(sys.stdin)["packages"]:
+    if p["source"] is None: print(os.path.dirname(p["manifest_path"]))
+' || true)
+[ -n "$CRATE_DIRS" ] || CRATE_DIRS="$REPO/crates"
+CHANGED=""
+if [ -d "$IOS/OuraCore.xcframework" ]; then
+  # shellcheck disable=SC2086
+  CHANGED=$(find $CRATE_DIRS "$REPO/Cargo.toml" "$REPO/Cargo.lock" -path '*/target' -prune -o \
+    -type f -newer "$IOS/OuraCore.xcframework" -print -quit 2>/dev/null || true)
+fi
+if [ ! -d "$IOS/OuraCore.xcframework" ] || [ -n "$CHANGED" ]; then
   say "building the Rust core (the first build takes a few minutes)"
   "$IOS/build-xcframework.sh"
 else
@@ -115,23 +150,41 @@ if ! xcodebuild -project "$APPDIR/OuraApp.xcodeproj" -scheme OuraApp \
 fi
 APP="$APPDIR/build/DerivedData-device/Build/Products/Debug-iphoneos/OuraApp.app"
 
+locked() {
+  xcrun devicectl device info lockState --device "$CORE_ID" -q --json-output - 2>/dev/null \
+    | /usr/bin/python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin)["result"]["passcodeRequired"] else 1)'
+}
+if locked; then
+  say "unlock \"$PHONE_NAME\" and keep the screen on until the app opens (waiting up to 3 minutes)"
+  for _ in $(seq 60); do locked || break; sleep 3; done
+  locked && die "The iPhone is still locked. Unlock it, keep the screen on, and run this again."
+fi
+xcrun devicectl device info ddiServices --device "$CORE_ID" --auto-mount-ddis -q >/dev/null 2>&1 \
+  || die "The Mac could not load its developer files onto the iPhone. Unlock the iPhone, keep the screen on, and run this again. If Auto-Lock is grey, Low Power Mode is on: touch the screen from time to time."
+
 say "installing on $PHONE_NAME"
-xcrun devicectl device install app --device "$CORE_ID" "$APP" >/dev/null
+xcrun devicectl device install app --device "$CORE_ID" "$APP" >/dev/null \
+  || die "The install failed. Unlock the iPhone, keep the screen on, and run this again."
 if xcrun devicectl device process launch --device "$CORE_ID" "$BUNDLE_ID" >/dev/null 2>&1; then
   say "Open Oura is running on $PHONE_NAME."
 else
   warn "Installed, but iOS did not let it start. This is normal the first time:"
-  warn "on the iPhone open Settings → General → VPN & Device Management, tap your Apple ID, tap Trust."
+  warn "on the iPhone open Settings → General → VPN & Device Management,"
+  warn "tap \"Apple Development: <your Apple ID>\", then tap Trust."
   warn "Then open Open Oura from the home screen."
 fi
 
 cat <<EOF
 
 Next, on the iPhone:
-  1. Delete the official Oura app, and in Settings → Bluetooth forget the ring.
-  2. Factory-reset the ring on its charger (see the setup guide).
-  3. Open Open Oura, tap Scan for rings, tap your ring, tap Pair.
+  1. Sync the official Oura app one last time. Then delete it, and in
+     Settings → Bluetooth forget the ring.
+  2. Factory-reset the ring on its charger (see the setup guide). Do not set it
+     up in the official app again.
+  3. Open Open Oura, tap Scan for rings, tap your ring, tap Pair. A reset ring
+     can show as "Oura <serial>".
   4. Settings → General → Background App Refresh → on for Open Oura.
 
-A free Apple ID install stops after 7 days. Run this script again to renew it.
+A free Apple ID install stops after 7 days, on $(date -v+7d '+%A %-d %B'). Before
+then, connect the iPhone and run this script again: DEVICE="$UDID" $0
 EOF

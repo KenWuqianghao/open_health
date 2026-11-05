@@ -79,6 +79,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// Set once iOS connected before a requested start delay ended. The hold-off
     /// then falls back to the in-app timer, which does not run while suspended.
     private static let startDelayIgnoredKey = "ring.start-delay-ignored"
+    private static let ignoredStartDelayThreshold: TimeInterval = 60
     static var startDelayIgnored: Bool {
         get { UserDefaults.standard.bool(forKey: startDelayIgnoredKey) }
         set { UserDefaults.standard.set(newValue, forKey: startDelayIgnoredKey) }
@@ -494,7 +495,9 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     /// The ring came back but no sync is due. Keep a parked link as it is; with the
     /// release policy drop it and wait `holdOff` before arming again.
-    func settle(policy: LinkPolicy, holdOff: TimeInterval) {
+    func settle(policy: LinkPolicy, holdOff requested: TimeInterval) {
+        // A shorter start delay than this hides an ignored delay from `didConnect`.
+        let holdOff = max(requested, 2 * Self.ignoredStartDelayThreshold)
         lock.lock()
         guard case .parked(let p) = ownership else { lock.unlock(); return }
         if policy == .park { lock.unlock(); return }
@@ -502,7 +505,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         holdOffUntil = Date().addingTimeInterval(holdOff)
         lock.unlock()
         central.cancelPeripheralConnection(p)
-        dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff / 60)) min")
+        dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff)) s")
         arm()
     }
 
@@ -672,7 +675,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             let due = armDelayUntil
             armDelayUntil = nil
             lock.unlock()
-            if let due, due.timeIntervalSinceNow > 60 {
+            if let due, due.timeIntervalSinceNow > Self.ignoredStartDelayThreshold {
                 // iOS connected long before the start delay ended, so it ignores the
                 // option. Drop this link and use the app timer from now on; otherwise a
                 // ring that advertises right after a release reconnects in a loop.

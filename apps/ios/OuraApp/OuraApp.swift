@@ -591,8 +591,6 @@ struct IncidentListView: View {
     }
 }
 
-/// The toolbar sync button doubles as a live status light. It spins only while BLE
-/// is active, and stays still under Reduce Motion.
 private struct SyncIndicatorButton: View {
     @ObservedObject var ring: RingSync
     let action: () -> Void
@@ -612,11 +610,11 @@ private struct SyncIndicatorButton: View {
         .accessibilityHint("Opens sync status, logs, and manual controls")
         .sensoryFeedback(.success, trigger: justSynced) { _, now in now }
         .onAppear(perform: updateAnimation)
+        .onChange(of: ring.showsProgress) { _, _ in updateAnimation() }
         .onChange(of: ring.busy) { wasBusy, isBusy in
-            updateAnimation()
             // A finished sync confirms itself: the arrows become a checkmark for a
             // moment, then morph back.
-            if wasBusy && !isBusy && ring.lastReport != nil {
+            if wasBusy && !isBusy && ring.lastReport != nil && ring.isUserInitiated {
                 withAnimation(Motion.snappy) { justSynced = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(Motion.snappy) { justSynced = false }
@@ -627,7 +625,7 @@ private struct SyncIndicatorButton: View {
     }
 
     private func updateAnimation() {
-        if ring.busy && !reduceMotion {
+        if ring.showsProgress && !reduceMotion {
             rotation = 0
             withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
                 rotation = 360
@@ -753,7 +751,7 @@ struct RootView: View {
         .onAppear {
             // A cached summary makes launch immediate; this forced load replaces it
             // with SQLite + model output without blanking the existing cards.
-            load(force: true, clearCurrent: false)
+            load(force: true, clearCurrent: false, announcesRefresh: false)
             requestAutomaticSync()
             importFromHealth()
         }
@@ -795,7 +793,7 @@ struct RootView: View {
     /// cannot leave yesterday's activity sessions cached on screen.
     private func refreshAfterSync(_ report: SyncReport) {
         guard report.inserted > 0 else { return }
-        load(force: true, clearCurrent: false)
+        load(force: true, clearCurrent: false, announcesRefresh: ring.isUserInitiated)
     }
 
     private func requestAutomaticSync() {
@@ -813,7 +811,7 @@ struct RootView: View {
 
     private func importFromHealth() {
         Task {
-            if await HealthImport.shared.run() { load(force: true, clearCurrent: false) }
+            if await HealthImport.shared.run() { load(force: true, clearCurrent: false, announcesRefresh: false) }
         }
     }
 
@@ -828,9 +826,9 @@ struct RootView: View {
     // model-free summary first, then fold in the hypnogram / CVA / activity results.
     // Keep the screen awake for the whole pass so auto-lock cannot kill a long
     // analysis (same IdleTimerLock the BLE sync already uses).
-    private func load(force: Bool = false, clearCurrent: Bool = false) {
+    private func load(force: Bool = false, clearCurrent: Bool = false, announcesRefresh: Bool = true) {
         guard force || s == nil else { return }
-        isRefreshingSummary = true
+        if announcesRefresh { isRefreshingSummary = true }
         loadGeneration += 1
         let generation = loadGeneration
         IdleTimerLock.acquire("models")
@@ -917,7 +915,7 @@ struct RootView: View {
                     // highlights: the digest line, and the sync / analysis status while
                     // the ring or the models are working (HIG: describe the work, not the wait)
                     HighlightsCard(digest: s.days.first.flatMap { s.highlight(for: $0) } ?? s.digest,
-                                   status: ring.busy ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
+                                   status: ring.showsProgress ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
                                        : (isRefreshingSummary ? (modelProgress.label.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Updating your summary…") : nil))
                         .entrance(0)
 
@@ -1098,7 +1096,7 @@ struct RootView: View {
             .refreshable {
                 if ring.isPaired { _ = await ring.run() } else { load(force: true) }
             }
-            .sensoryFeedback(.impact(flexibility: .soft), trigger: ring.busy) { _, now in now }
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: ring.busy) { _, now in now && ring.showsProgress }
         }
     }
 }

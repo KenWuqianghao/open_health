@@ -345,7 +345,8 @@ final class RingSync: ObservableObject {
 
     @Published var status: String = ""
     @Published var busy = false
-    @Published var trigger: SyncTrigger?
+    @Published private(set) var isUserInitiated = false
+    var showsProgress: Bool { busy && isUserInitiated }
     @Published var lastReport: SyncReport?
     @Published private(set) var lastSuccessfulSyncAt: Date?
     @Published var history: [SyncMetrics] = SyncHistoryStore.load()
@@ -371,10 +372,10 @@ final class RingSync: ObservableObject {
     var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: "ring.sync-incomplete") }
     var isPaired: Bool { PairedRingStore.load() != nil && Keychain.loadKey() != nil }
 
-    /// A manual sync from the UI.
     @discardableResult
     func run() async -> SyncReport? {
-        await SyncCoordinator.shared.sync(trigger: .manual).report
+        if busy { isUserInitiated = true }
+        return await SyncCoordinator.shared.sync(trigger: .manual).report
     }
 
     func syncAutomaticallyIfNeeded() async -> SyncReport? {
@@ -393,6 +394,8 @@ final class RingSync: ObservableObject {
             lastSuccessfulSyncAt = nil
             UserDefaults.standard.removeObject(forKey: "ring.last-successful-sync-at")
             UserDefaults.standard.removeObject(forKey: "ring.sync-incomplete")
+            UserDefaults.standard.removeObject(forKey: "ring.failed-runs-in-a-row")
+            UserDefaults.standard.removeObject(forKey: "ring.last-failed-sync-at")
             status = "local sync database reset — the next sync drains the ring from the start"
             dlog("db", "writable sync database reset")
         } catch {
@@ -405,7 +408,7 @@ final class RingSync: ObservableObject {
 
     func begin(trigger: SyncTrigger) {
         busy = true
-        self.trigger = trigger
+        isUserInitiated = trigger.isUserInitiated
         lastReport = nil
         lastProgressBytes = nil
         lastProgressAt = nil
@@ -449,7 +452,6 @@ final class RingSync: ObservableObject {
 
     func end(outcome: SyncOutcome) {
         busy = false
-        trigger = nil
         if let report = outcome.report {
             lastReport = report
             lastSuccessfulSyncAt = Date()

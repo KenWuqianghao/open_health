@@ -22,6 +22,8 @@ enum SyncTrigger: String, Codable, Sendable {
     case manual, foreground, postPair, bgRefresh, bgProcessing, bleRestore
     /// Not a sync: a live heart rate stream, or a read or change of ring settings.
     case live, ringControl
+
+    var isUserInitiated: Bool { self == .manual || self == .postPair }
 }
 
 enum SyncExit: String, Codable, Sendable {
@@ -213,6 +215,8 @@ actor SyncCoordinator {
     private static let lastSuccessKey = "ring.last-successful-sync-at"
     private static let lastCursorKey = "ring.last-cursor"
     private static let syncIncompleteKey = "ring.sync-incomplete"
+    private static let failedRunsKey = "ring.failed-runs-in-a-row"
+    private static let lastFailureKey = "ring.last-failed-sync-at"
     static let automaticSyncCooldown: TimeInterval = 3 * 60
     private var lastAutomaticAttemptAt: Date?
     /// Set the moment a drain reports real progress, cleared only on a completed sync.
@@ -228,6 +232,12 @@ actor SyncCoordinator {
     }
 
     var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: Self.syncIncompleteKey) }
+
+    private var failureStreak: (runs: Int, lastAt: Date?) {
+        let defaults = UserDefaults.standard
+        let t = defaults.double(forKey: Self.lastFailureKey)
+        return (defaults.integer(forKey: Self.failedRunsKey), t > 0 ? Date(timeIntervalSince1970: t) : nil)
+    }
 
     var isBusy: Bool { current != nil }
 
@@ -265,14 +275,27 @@ actor SyncCoordinator {
     /// wake. No ring-initiated sync starts this soon after a completed one.
     static let wakeCooldown: TimeInterval = 10 * 60
 
+    static func wakeHoldOff(now: Date, lastSuccessAt: Date?, failedRunsInARow: Int,
+                            lastFailureAt: Date?) -> TimeInterval {
+        var until = lastSuccessAt.map { $0.addingTimeInterval(wakeCooldown) } ?? .distantPast
+        if let failedAt = lastFailureAt {
+            let backoff = min(wakeCooldown, 120 * pow(2, Double(max(failedRunsInARow, 1) - 1)))
+            until = max(until, failedAt.addingTimeInterval(backoff))
+        }
+        return min(wakeCooldown, max(0, until.timeIntervalSince(now)))
+    }
+
     func handleUnsolicitedConnect(_ peripheral: CBPeripheral) {
         guard current == nil else {
             dlog("sync", "unsolicited connect while busy — ignored")
             return
         }
-        if let last = lastSuccessAt, Date().timeIntervalSince(last) < Self.wakeCooldown {
-            dlog("sync", "ring reconnected \(Int(Date().timeIntervalSince(last))) s after a sync — waiting out the \(Int(Self.wakeCooldown / 60)) min cooldown")
-            RingCentral.shared.settle(policy: SyncSettings.linkPolicy, holdOff: Self.wakeCooldown)
+        let streak = failureStreak
+        let wait = Self.wakeHoldOff(now: Date(), lastSuccessAt: lastSuccessAt,
+                                    failedRunsInARow: streak.runs, lastFailureAt: streak.lastAt)
+        if wait > 0 {
+            dlog("sync", "ring woke the app — next sync in \(Int(wait.rounded(.up))) s (\(streak.runs) failed run(s) in a row)")
+            RingCentral.shared.settle(policy: SyncSettings.linkPolicy, holdOff: wait)
             return
         }
         let transport = RingCentral.shared.claim(peripheral, for: .bleRestore)
@@ -535,6 +558,7 @@ actor SyncCoordinator {
         if case .synced = outcome {} else {
             await RingSync.shared.finishFailure(trigger: trigger, outcome: outcome, attempts: policy.attempts)
         }
+        recordFailureStreak(outcome, of: trigger)
         await hooks.afterSync(trigger, outcome.report, policy)
         if let t = transport {
             // With the release policy the ring reconnects the moment we drop it, so
@@ -552,6 +576,28 @@ actor SyncCoordinator {
         await RingSync.shared.end(outcome: outcome)
         current = nil
         return outcome
+    }
+
+    static func failedRunsInARow(after outcome: SyncOutcome, of trigger: SyncTrigger,
+                                 madeProgress: Bool, previous: Int) -> Int {
+        if madeProgress { return 0 }
+        switch outcome {
+        case .synced: return 0
+        case .failed where trigger == .bleRestore: return previous + 1
+        default: return previous
+        }
+    }
+
+    private func recordFailureStreak(_ outcome: SyncOutcome, of trigger: SyncTrigger) {
+        let defaults = UserDefaults.standard
+        let runs = Self.failedRunsInARow(after: outcome, of: trigger, madeProgress: markedIncompleteThisRun,
+                                         previous: defaults.integer(forKey: Self.failedRunsKey))
+        if runs == 0 { defaults.removeObject(forKey: Self.failedRunsKey) } else { defaults.set(runs, forKey: Self.failedRunsKey) }
+        if case .failed = outcome, !markedIncompleteThisRun {
+            defaults.set(Date().timeIntervalSince1970, forKey: Self.lastFailureKey)
+        } else if runs == 0 {
+            defaults.removeObject(forKey: Self.lastFailureKey)
+        }
     }
 
     private func markIncomplete() {

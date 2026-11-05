@@ -235,6 +235,12 @@ actor SyncCoordinator {
 
     var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: Self.syncIncompleteKey) }
 
+    private var failureStreak: (runs: Int, lastAt: Date?) {
+        let defaults = UserDefaults.standard
+        let t = defaults.double(forKey: Self.lastFailureKey)
+        return (defaults.integer(forKey: Self.failedRunsKey), t > 0 ? Date(timeIntervalSince1970: t) : nil)
+    }
+
     var isBusy: Bool { current != nil }
 
     /// A launch/foreground refresh behind a cooldown; eager when the last drain was
@@ -272,32 +278,36 @@ actor SyncCoordinator {
     static let wakeCooldown: TimeInterval = 10 * 60
 
     /// The time a ring-initiated run must still wait at `now`. After a completed
-    /// sync it waits out `wakeCooldown`. After failed runs in a row it waits 1, 2,
-    /// 4, 8 min, at most `wakeCooldown`: a ring that refuses each request then
-    /// does not start a new run every few seconds.
+    /// sync it waits out `wakeCooldown`. After failed runs in a row it waits 2, 4,
+    /// 8 min, then `wakeCooldown`: a ring that refuses each request then does not
+    /// start a new run every few seconds. A clock set back never waits longer
+    /// than `wakeCooldown`.
     static func wakeHoldOff(now: Date, lastSuccessAt: Date?, failedRunsInARow: Int,
                             lastFailureAt: Date?) -> TimeInterval {
         var until = lastSuccessAt.map { $0.addingTimeInterval(wakeCooldown) } ?? .distantPast
         if failedRunsInARow > 0, let failedAt = lastFailureAt {
-            let backoff = min(wakeCooldown, 60 * pow(2, Double(min(failedRunsInARow, 8) - 1)))
+            let backoff = min(wakeCooldown, 120 * pow(2, Double(min(failedRunsInARow, 8) - 1)))
             until = max(until, failedAt.addingTimeInterval(backoff))
         }
-        return max(0, until.timeIntervalSince(now))
+        return min(wakeCooldown, max(0, until.timeIntervalSince(now)))
     }
+
+    /// `RingCentral` sees that iOS ignores the connect start delay only when the
+    /// ring connects more than 60 s early, so a shorter hold-off could reconnect
+    /// every second until it ends.
+    private static let minimumWakeHoldOff: TimeInterval = 2 * 60
 
     func handleUnsolicitedConnect(_ peripheral: CBPeripheral) {
         guard current == nil else {
             dlog("sync", "unsolicited connect while busy — ignored")
             return
         }
-        let defaults = UserDefaults.standard
-        let failedRuns = defaults.integer(forKey: Self.failedRunsKey)
-        let lastFailure = defaults.double(forKey: Self.lastFailureKey)
-        let wait = Self.wakeHoldOff(now: Date(), lastSuccessAt: lastSuccessAt, failedRunsInARow: failedRuns,
-                                    lastFailureAt: lastFailure > 0 ? Date(timeIntervalSince1970: lastFailure) : nil)
+        let streak = failureStreak
+        let wait = Self.wakeHoldOff(now: Date(), lastSuccessAt: lastSuccessAt,
+                                    failedRunsInARow: streak.runs, lastFailureAt: streak.lastAt)
         if wait > 0 {
-            dlog("sync", "ring reconnected — next sync in \(Int(wait.rounded(.up))) s (\(failedRuns) failed run(s) in a row)")
-            RingCentral.shared.settle(policy: SyncSettings.linkPolicy, holdOff: wait)
+            dlog("sync", "ring woke the app — next sync in \(Int(wait.rounded(.up))) s (\(streak.runs) failed run(s) in a row)")
+            RingCentral.shared.settle(policy: SyncSettings.linkPolicy, holdOff: max(wait, Self.minimumWakeHoldOff))
             return
         }
         let transport = RingCentral.shared.claim(peripheral, for: .bleRestore)
@@ -581,17 +591,17 @@ actor SyncCoordinator {
     }
 
     /// A failed run lengthens the wait before the next ring-initiated run
-    /// (`wakeHoldOff`); a run that moved the cursor ends the streak.
+    /// (`wakeHoldOff`); a completed sync ends the streak.
     private func recordFailureStreak(_ outcome: SyncOutcome) {
         let defaults = UserDefaults.standard
         switch outcome {
         case .failed:
             defaults.set(defaults.integer(forKey: Self.failedRunsKey) + 1, forKey: Self.failedRunsKey)
             defaults.set(Date().timeIntervalSince1970, forKey: Self.lastFailureKey)
-        case .synced, .partial:
+        case .synced:
             defaults.removeObject(forKey: Self.failedRunsKey)
             defaults.removeObject(forKey: Self.lastFailureKey)
-        case .skipped:
+        case .partial, .skipped:
             break
         }
     }

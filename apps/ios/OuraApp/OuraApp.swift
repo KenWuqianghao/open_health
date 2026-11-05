@@ -629,7 +629,7 @@ private struct SyncIndicatorButton: View {
     }
 
     private func updateAnimation() {
-        if ring.busy && ring.isUserInitiated && !reduceMotion {
+        if ring.showsProgress && !reduceMotion {
             rotation = 0
             withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
                 rotation = 360
@@ -921,7 +921,7 @@ struct RootView: View {
                     // highlights: the digest line, and the sync / analysis status while
                     // the ring or the models are working (HIG: describe the work, not the wait)
                     HighlightsCard(digest: s.days.first.flatMap { s.highlight(for: $0) } ?? s.digest,
-                                   status: ring.busy && ring.isUserInitiated ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
+                                   status: ring.showsProgress ? (ring.status.isEmpty ? "Syncing with your ring…" : ring.status)
                                        : (isRefreshingSummary ? (modelProgress.label.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Updating your summary…") : nil))
                         .entrance(0)
 
@@ -1102,7 +1102,7 @@ struct RootView: View {
             .refreshable {
                 if ring.isPaired { _ = await ring.run() } else { load(force: true) }
             }
-            .sensoryFeedback(.impact(flexibility: .soft), trigger: ring.busy) { _, now in now && ring.isUserInitiated }
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: ring.busy) { _, now in now && ring.showsProgress }
         }
     }
 }

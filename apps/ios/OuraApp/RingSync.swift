@@ -348,6 +348,7 @@ final class RingSync: ObservableObject {
     /// The user asked for the run in progress, or for the last run when none runs.
     /// Only such a run shows its progress on the Summary screen.
     @Published private(set) var isUserInitiated = false
+    var showsProgress: Bool { busy && isUserInitiated }
     @Published var lastReport: SyncReport?
     @Published private(set) var lastSuccessfulSyncAt: Date?
     @Published var history: [SyncMetrics] = SyncHistoryStore.load()
@@ -397,6 +398,8 @@ final class RingSync: ObservableObject {
             lastSuccessfulSyncAt = nil
             UserDefaults.standard.removeObject(forKey: "ring.last-successful-sync-at")
             UserDefaults.standard.removeObject(forKey: "ring.sync-incomplete")
+            UserDefaults.standard.removeObject(forKey: "ring.failed-runs-in-a-row")
+            UserDefaults.standard.removeObject(forKey: "ring.last-failed-sync-at")
             status = "local sync database reset — the next sync drains the ring from the start"
             dlog("db", "writable sync database reset")
         } catch {

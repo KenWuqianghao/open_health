@@ -502,7 +502,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         holdOffUntil = Date().addingTimeInterval(holdOff)
         lock.unlock()
         central.cancelPeripheralConnection(p)
-        dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff / 60)) min")
+        dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff)) s")
         arm()
     }
 

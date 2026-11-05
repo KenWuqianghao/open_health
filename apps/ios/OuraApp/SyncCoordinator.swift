@@ -23,8 +23,6 @@ enum SyncTrigger: String, Codable, Sendable {
     /// Not a sync: a live heart rate stream, or a read or change of ring settings.
     case live, ringControl
 
-    /// The user asked for this run: a button, pull to refresh, or the first sync
-    /// after pairing. Only such a run shows its progress on the screen.
     var isUserInitiated: Bool { self == .manual || self == .postPair }
 }
 
@@ -277,25 +275,17 @@ actor SyncCoordinator {
     /// wake. No ring-initiated sync starts this soon after a completed one.
     static let wakeCooldown: TimeInterval = 10 * 60
 
-    /// The time a ring-initiated run must still wait at `now`. After a completed
-    /// sync it waits out `wakeCooldown`. After failed runs in a row it waits 2, 4,
-    /// 8 min, then `wakeCooldown`: a ring that refuses each request then does not
-    /// start a new run every few seconds. A clock set back never waits longer
-    /// than `wakeCooldown`.
     static func wakeHoldOff(now: Date, lastSuccessAt: Date?, failedRunsInARow: Int,
                             lastFailureAt: Date?) -> TimeInterval {
         var until = lastSuccessAt.map { $0.addingTimeInterval(wakeCooldown) } ?? .distantPast
         if failedRunsInARow > 0, let failedAt = lastFailureAt {
-            let backoff = min(wakeCooldown, 120 * pow(2, Double(min(failedRunsInARow, 8) - 1)))
+            let backoff = min(wakeCooldown, minimumWakeHoldOff * pow(2, Double(failedRunsInARow - 1)))
             until = max(until, failedAt.addingTimeInterval(backoff))
         }
         return min(wakeCooldown, max(0, until.timeIntervalSince(now)))
     }
 
-    /// `RingCentral` sees that iOS ignores the connect start delay only when the
-    /// ring connects more than 60 s early, so a shorter hold-off could reconnect
-    /// every second until it ends.
-    private static let minimumWakeHoldOff: TimeInterval = 2 * 60
+    static let minimumWakeHoldOff = 2 * RingCentral.ignoredStartDelayThreshold
 
     func handleUnsolicitedConnect(_ peripheral: CBPeripheral) {
         guard current == nil else {
@@ -590,8 +580,6 @@ actor SyncCoordinator {
         return outcome
     }
 
-    /// A failed run lengthens the wait before the next ring-initiated run
-    /// (`wakeHoldOff`); a completed sync ends the streak.
     private func recordFailureStreak(_ outcome: SyncOutcome) {
         let defaults = UserDefaults.standard
         switch outcome {

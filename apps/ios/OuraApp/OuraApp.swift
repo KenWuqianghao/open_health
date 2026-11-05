@@ -591,9 +591,6 @@ struct IncidentListView: View {
     }
 }
 
-/// The toolbar sync button doubles as a live status light. Any sync tints it; only a
-/// sync the user asked for spins it and confirms the end. It stays still under
-/// Reduce Motion.
 private struct SyncIndicatorButton: View {
     @ObservedObject var ring: RingSync
     let action: () -> Void
@@ -755,7 +752,7 @@ struct RootView: View {
         .onAppear {
             // A cached summary makes launch immediate; this forced load replaces it
             // with SQLite + model output without blanking the existing cards.
-            load(force: true, clearCurrent: false, announce: false)
+            load(force: true, clearCurrent: false, showsProgress: false)
             requestAutomaticSync()
             importFromHealth()
         }
@@ -797,7 +794,7 @@ struct RootView: View {
     /// cannot leave yesterday's activity sessions cached on screen.
     private func refreshAfterSync(_ report: SyncReport) {
         guard report.inserted > 0 else { return }
-        load(force: true, clearCurrent: false, announce: ring.isUserInitiated)
+        load(force: true, clearCurrent: false, showsProgress: ring.isUserInitiated)
     }
 
     private func requestAutomaticSync() {
@@ -815,7 +812,7 @@ struct RootView: View {
 
     private func importFromHealth() {
         Task {
-            if await HealthImport.shared.run() { load(force: true, clearCurrent: false, announce: false) }
+            if await HealthImport.shared.run() { load(force: true, clearCurrent: false, showsProgress: false) }
         }
     }
 
@@ -830,11 +827,9 @@ struct RootView: View {
     // model-free summary first, then fold in the hypnogram / CVA / activity results.
     // Keep the screen awake for the whole pass so auto-lock cannot kill a long
     // analysis (same IdleTimerLock the BLE sync already uses).
-    // `announce` shows the progress line; a reload the user did not ask for runs
-    // without it and replaces the cards when it is done.
-    private func load(force: Bool = false, clearCurrent: Bool = false, announce: Bool = true) {
+    private func load(force: Bool = false, clearCurrent: Bool = false, showsProgress: Bool = true) {
         guard force || s == nil else { return }
-        if announce { isRefreshingSummary = true }
+        if showsProgress { isRefreshingSummary = true }
         loadGeneration += 1
         let generation = loadGeneration
         IdleTimerLock.acquire("models")

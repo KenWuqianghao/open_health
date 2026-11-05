@@ -79,6 +79,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// Set once iOS connected before a requested start delay ended. The hold-off
     /// then falls back to the in-app timer, which does not run while suspended.
     private static let startDelayIgnoredKey = "ring.start-delay-ignored"
+    static let ignoredStartDelayThreshold: TimeInterval = 60
     static var startDelayIgnored: Bool {
         get { UserDefaults.standard.bool(forKey: startDelayIgnoredKey) }
         set { UserDefaults.standard.set(newValue, forKey: startDelayIgnoredKey) }
@@ -672,7 +673,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             let due = armDelayUntil
             armDelayUntil = nil
             lock.unlock()
-            if let due, due.timeIntervalSinceNow > 60 {
+            if let due, due.timeIntervalSinceNow > Self.ignoredStartDelayThreshold {
                 // iOS connected long before the start delay ended, so it ignores the
                 // option. Drop this link and use the app timer from now on; otherwise a
                 // ring that advertises right after a release reconnects in a loop.

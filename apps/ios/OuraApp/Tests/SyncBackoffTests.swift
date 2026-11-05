@@ -14,7 +14,6 @@ final class SyncBackoffTests: XCTestCase {
     func testRingWakeWaitsLongerAfterEachFailedRun() {
         let daysAgo: TimeInterval = 4 * 86_400
         XCTAssertEqual(holdOff(success: daysAgo, failures: 0, failure: nil), 0)
-        // A ring that refuses each request: 2, 4, 8 min, then at most 10 min.
         let waits = [1, 2, 3, 4, 50].map { holdOff(success: daysAgo, failures: $0, failure: 0) }
         XCTAssertEqual(waits, [120, 240, 480, 600, 600])
         XCTAssertEqual(holdOff(success: daysAgo, failures: 2, failure: 300), 0)
@@ -23,7 +22,9 @@ final class SyncBackoffTests: XCTestCase {
     func testRingWakeKeepsTheCooldownAfterASuccess() {
         XCTAssertEqual(holdOff(success: 30, failures: 0, failure: nil), 570)
         XCTAssertEqual(holdOff(success: 120, failures: 1, failure: 0), 480)
-        // A success stamped in the future (the clock was set back).
+    }
+
+    func testRingWakeWaitsNoLongerThanTheCooldownAfterTheClockIsSetBack() {
         XCTAssertEqual(holdOff(success: -86_400, failures: 0, failure: nil), 600)
     }
 }

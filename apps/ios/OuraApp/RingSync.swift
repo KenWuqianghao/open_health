@@ -345,8 +345,6 @@ final class RingSync: ObservableObject {
 
     @Published var status: String = ""
     @Published var busy = false
-    /// The user asked for the run in progress, or for the last run when none runs.
-    /// Only such a run shows its progress on the Summary screen.
     @Published private(set) var isUserInitiated = false
     var showsProgress: Bool { busy && isUserInitiated }
     @Published var lastReport: SyncReport?
@@ -374,13 +372,13 @@ final class RingSync: ObservableObject {
     var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: "ring.sync-incomplete") }
     var isPaired: Bool { PairedRingStore.load() != nil && Keychain.loadKey() != nil }
 
-    /// A manual sync from the UI. If an automatic sync already runs, its progress
-    /// becomes visible instead.
     @discardableResult
     func run() async -> SyncReport? {
-        if busy { isUserInitiated = true }
+        if busy { revealRunningSync() }
         return await SyncCoordinator.shared.sync(trigger: .manual).report
     }
+
+    private func revealRunningSync() { isUserInitiated = true }
 
     func syncAutomaticallyIfNeeded() async -> SyncReport? {
         if hasIncompleteSync { status = "resuming interrupted sync from checkpoint…" }

@@ -345,7 +345,9 @@ final class RingSync: ObservableObject {
 
     @Published var status: String = ""
     @Published var busy = false
-    @Published var trigger: SyncTrigger?
+    /// The user asked for the run in progress, or for the last run when none runs.
+    /// Only such a run shows its progress on the Summary screen.
+    @Published private(set) var isUserInitiated = false
     @Published var lastReport: SyncReport?
     @Published private(set) var lastSuccessfulSyncAt: Date?
     @Published var history: [SyncMetrics] = SyncHistoryStore.load()
@@ -371,10 +373,12 @@ final class RingSync: ObservableObject {
     var hasIncompleteSync: Bool { UserDefaults.standard.bool(forKey: "ring.sync-incomplete") }
     var isPaired: Bool { PairedRingStore.load() != nil && Keychain.loadKey() != nil }
 
-    /// A manual sync from the UI.
+    /// A manual sync from the UI. If an automatic sync already runs, its progress
+    /// becomes visible instead.
     @discardableResult
     func run() async -> SyncReport? {
-        await SyncCoordinator.shared.sync(trigger: .manual).report
+        if busy { isUserInitiated = true }
+        return await SyncCoordinator.shared.sync(trigger: .manual).report
     }
 
     func syncAutomaticallyIfNeeded() async -> SyncReport? {
@@ -405,7 +409,7 @@ final class RingSync: ObservableObject {
 
     func begin(trigger: SyncTrigger) {
         busy = true
-        self.trigger = trigger
+        isUserInitiated = trigger.isUserInitiated
         lastReport = nil
         lastProgressBytes = nil
         lastProgressAt = nil
@@ -449,7 +453,6 @@ final class RingSync: ObservableObject {
 
     func end(outcome: SyncOutcome) {
         busy = false
-        trigger = nil
         if let report = outcome.report {
             lastReport = report
             lastSuccessfulSyncAt = Date()

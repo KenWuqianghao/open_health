@@ -79,7 +79,7 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// Set once iOS connected before a requested start delay ended. The hold-off
     /// then falls back to the in-app timer, which does not run while suspended.
     private static let startDelayIgnoredKey = "ring.start-delay-ignored"
-    static let ignoredStartDelayThreshold: TimeInterval = 60
+    private static let ignoredStartDelayThreshold: TimeInterval = 60
     static var startDelayIgnored: Bool {
         get { UserDefaults.standard.bool(forKey: startDelayIgnoredKey) }
         set { UserDefaults.standard.set(newValue, forKey: startDelayIgnoredKey) }
@@ -495,7 +495,9 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     /// The ring came back but no sync is due. Keep a parked link as it is; with the
     /// release policy drop it and wait `holdOff` before arming again.
-    func settle(policy: LinkPolicy, holdOff: TimeInterval) {
+    func settle(policy: LinkPolicy, holdOff requested: TimeInterval) {
+        // A shorter start delay than this hides an ignored delay from `didConnect`.
+        let holdOff = max(requested, 2 * Self.ignoredStartDelayThreshold)
         lock.lock()
         guard case .parked(let p) = ownership else { lock.unlock(); return }
         if policy == .park { lock.unlock(); return }

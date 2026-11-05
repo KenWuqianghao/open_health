@@ -610,9 +610,8 @@ private struct SyncIndicatorButton: View {
         .accessibilityHint("Opens sync status, logs, and manual controls")
         .sensoryFeedback(.success, trigger: justSynced) { _, now in now }
         .onAppear(perform: updateAnimation)
-        .onChange(of: ring.isUserInitiated) { _, _ in updateAnimation() }
+        .onChange(of: ring.showsProgress) { _, _ in updateAnimation() }
         .onChange(of: ring.busy) { wasBusy, isBusy in
-            updateAnimation()
             // A finished sync confirms itself: the arrows become a checkmark for a
             // moment, then morph back.
             if wasBusy && !isBusy && ring.lastReport != nil && ring.isUserInitiated {
@@ -752,7 +751,7 @@ struct RootView: View {
         .onAppear {
             // A cached summary makes launch immediate; this forced load replaces it
             // with SQLite + model output without blanking the existing cards.
-            load(force: true, clearCurrent: false, showsProgress: false)
+            load(force: true, clearCurrent: false, announcesRefresh: false)
             requestAutomaticSync()
             importFromHealth()
         }
@@ -794,7 +793,7 @@ struct RootView: View {
     /// cannot leave yesterday's activity sessions cached on screen.
     private func refreshAfterSync(_ report: SyncReport) {
         guard report.inserted > 0 else { return }
-        load(force: true, clearCurrent: false, showsProgress: ring.isUserInitiated)
+        load(force: true, clearCurrent: false, announcesRefresh: ring.isUserInitiated)
     }
 
     private func requestAutomaticSync() {
@@ -812,7 +811,7 @@ struct RootView: View {
 
     private func importFromHealth() {
         Task {
-            if await HealthImport.shared.run() { load(force: true, clearCurrent: false, showsProgress: false) }
+            if await HealthImport.shared.run() { load(force: true, clearCurrent: false, announcesRefresh: false) }
         }
     }
 
@@ -827,9 +826,9 @@ struct RootView: View {
     // model-free summary first, then fold in the hypnogram / CVA / activity results.
     // Keep the screen awake for the whole pass so auto-lock cannot kill a long
     // analysis (same IdleTimerLock the BLE sync already uses).
-    private func load(force: Bool = false, clearCurrent: Bool = false, showsProgress: Bool = true) {
+    private func load(force: Bool = false, clearCurrent: Bool = false, announcesRefresh: Bool = true) {
         guard force || s == nil else { return }
-        if showsProgress { isRefreshingSummary = true }
+        if announcesRefresh { isRefreshingSummary = true }
         loadGeneration += 1
         let generation = loadGeneration
         IdleTimerLock.acquire("models")

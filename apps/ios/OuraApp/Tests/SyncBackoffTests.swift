@@ -24,6 +24,18 @@ final class SyncBackoffTests: XCTestCase {
         XCTAssertEqual(holdOff(success: 120, failures: 1, failure: 0), 480)
     }
 
+    func testOnlyFailedRingWakesExtendTheStreakAndASyncEndsIt() {
+        let report = SyncReport(serial: "", eventsSynced: 0, inserted: 0, nextCursor: 0, clockWritten: false)
+        let next = { (outcome: SyncOutcome, trigger: SyncTrigger) in
+            SyncCoordinator.failedRunsInARow(after: outcome, of: trigger, previous: 3)
+        }
+        XCTAssertEqual(next(.failed(.connectFailed, ""), .bleRestore), 4)
+        XCTAssertEqual(next(.failed(.connectFailed, ""), .foreground), 3)
+        XCTAssertEqual(next(.partial(.deadline), .bleRestore), 3)
+        XCTAssertEqual(next(.skipped(.busy), .bleRestore), 3)
+        XCTAssertEqual(next(.synced(report), .foreground), 0)
+    }
+
     func testRingWakeWaitsNoLongerThanTheCooldownAfterTheClockIsSetBack() {
         XCTAssertEqual(holdOff(success: -86_400, failures: 0, failure: nil), 600)
     }

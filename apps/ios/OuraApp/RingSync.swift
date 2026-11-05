@@ -374,11 +374,9 @@ final class RingSync: ObservableObject {
 
     @discardableResult
     func run() async -> SyncReport? {
-        if busy { revealRunningSync() }
+        if busy { isUserInitiated = true }
         return await SyncCoordinator.shared.sync(trigger: .manual).report
     }
-
-    private func revealRunningSync() { isUserInitiated = true }
 
     func syncAutomaticallyIfNeeded() async -> SyncReport? {
         if hasIncompleteSync { status = "resuming interrupted sync from checkpoint…" }

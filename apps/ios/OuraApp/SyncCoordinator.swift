@@ -278,8 +278,8 @@ actor SyncCoordinator {
     static func wakeHoldOff(now: Date, lastSuccessAt: Date?, failedRunsInARow: Int,
                             lastFailureAt: Date?) -> TimeInterval {
         var until = lastSuccessAt.map { $0.addingTimeInterval(wakeCooldown) } ?? .distantPast
-        if failedRunsInARow > 0, let failedAt = lastFailureAt {
-            let backoff = min(wakeCooldown, 120 * pow(2, Double(failedRunsInARow - 1)))
+        if let failedAt = lastFailureAt {
+            let backoff = min(wakeCooldown, 120 * pow(2, Double(max(failedRunsInARow, 1) - 1)))
             until = max(until, failedAt.addingTimeInterval(backoff))
         }
         return min(wakeCooldown, max(0, until.timeIntervalSince(now)))
@@ -578,7 +578,9 @@ actor SyncCoordinator {
         return outcome
     }
 
-    static func failedRunsInARow(after outcome: SyncOutcome, of trigger: SyncTrigger, previous: Int) -> Int {
+    static func failedRunsInARow(after outcome: SyncOutcome, of trigger: SyncTrigger,
+                                 madeProgress: Bool, previous: Int) -> Int {
+        if madeProgress { return 0 }
         switch outcome {
         case .synced: return 0
         case .failed where trigger == .bleRestore: return previous + 1
@@ -588,15 +590,13 @@ actor SyncCoordinator {
 
     private func recordFailureStreak(_ outcome: SyncOutcome, of trigger: SyncTrigger) {
         let defaults = UserDefaults.standard
-        let previous = defaults.integer(forKey: Self.failedRunsKey)
-        let runs = Self.failedRunsInARow(after: outcome, of: trigger, previous: previous)
-        guard runs != previous else { return }
-        if runs == 0 {
-            defaults.removeObject(forKey: Self.failedRunsKey)
-            defaults.removeObject(forKey: Self.lastFailureKey)
-        } else {
-            defaults.set(runs, forKey: Self.failedRunsKey)
+        let runs = Self.failedRunsInARow(after: outcome, of: trigger, madeProgress: markedIncompleteThisRun,
+                                         previous: defaults.integer(forKey: Self.failedRunsKey))
+        if runs == 0 { defaults.removeObject(forKey: Self.failedRunsKey) } else { defaults.set(runs, forKey: Self.failedRunsKey) }
+        if case .failed = outcome, !markedIncompleteThisRun {
             defaults.set(Date().timeIntervalSince1970, forKey: Self.lastFailureKey)
+        } else if runs == 0 {
+            defaults.removeObject(forKey: Self.lastFailureKey)
         }
     }
 

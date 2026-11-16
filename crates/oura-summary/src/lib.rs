@@ -875,12 +875,17 @@ fn activity_day_stats(
     days
 }
 
-fn keep_longest_night(seeds: &mut Vec<ScoreSeed>, seed: ScoreSeed) {
-    if seeds.iter().any(|s| s.wake_day == seed.wake_day && s.in_bed_s >= seed.in_bed_s) {
-        return;
+/// The main night of each wake day, as `wake_day -> index` into `nights`: the longest
+/// time in bed, the earlier night on a tie. The other nights of the day are naps.
+/// `nights` gives `(wake_day, in_bed)` per night.
+fn main_night_per_wake_day(nights: impl IntoIterator<Item = (i64, f64)>) -> std::collections::BTreeMap<i64, usize> {
+    let mut main: std::collections::BTreeMap<i64, (usize, f64)> = Default::default();
+    for (i, (day, in_bed)) in nights.into_iter().enumerate() {
+        if main.get(&day).is_none_or(|&(_, longest)| in_bed > longest) {
+            main.insert(day, (i, in_bed));
+        }
     }
-    seeds.retain(|s| s.wake_day != seed.wake_day);
-    seeds.push(seed);
+    main.into_iter().map(|(day, (i, _))| (day, i)).collect()
 }
 
 /// The personal baseline for night `i`: up to 14 nights before it, never the night itself.
@@ -1421,24 +1426,21 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
             hrv_baseline,
             age: demo.age,
         });
-        keep_longest_night(
-            &mut score_seeds,
-            ScoreSeed {
-                wake_day,
-                in_bed_s,
-                sleep: night_sleep_score.clone(),
-                rhr: night_rhr_all[ni],
-                rhr_baseline,
-                hrv: night_hrv_all[ni],
-                hrv_baseline,
-                temp_deviation: match (night_temp_all[ni], temp_baseline) {
-                    (Some(t), Some(b)) => Some(t - b.mean),
-                    _ => None,
-                },
-                temp_baseline,
-                recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
+        score_seeds.push(ScoreSeed {
+            wake_day,
+            in_bed_s,
+            sleep: night_sleep_score.clone(),
+            rhr: night_rhr_all[ni],
+            rhr_baseline,
+            hrv: night_hrv_all[ni],
+            hrv_baseline,
+            temp_deviation: match (night_temp_all[ni], temp_baseline) {
+                (Some(t), Some(b)) => Some(t - b.mean),
+                _ => None,
             },
-        );
+            temp_baseline,
+            recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
+        });
         let temp_dev = match (night_temp_all[ni], temp_baseline) {
             (Some(t), Some(b)) => Some(((t - b.mean) * 100.0).round() / 100.0),
             _ => None,
@@ -1695,8 +1697,9 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
     let active_kcal_on = |day: i64| daily.get(&ymd_of(day)).map(|e| e.0);
     let mean_of = |vals: &[f64]| (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64);
     let mut score_days: std::collections::BTreeMap<i64, serde_json::Map<String, Value>> = Default::default();
-    for seed in &score_seeds {
-        let day = seed.wake_day;
+    let main_seeds = main_night_per_wake_day(score_seeds.iter().map(|s| (s.wake_day, s.in_bed_s)));
+    for (&day, &i) in &main_seeds {
+        let seed = &score_seeds[i];
         let (sleep_balance_ratio, sleep_balance_days) = sleep_balance(&asleep_by_day, day);
         let prior_kcal: Vec<f64> = (day - 15..day).filter_map(active_kcal_on).collect();
         let week_kcal: Vec<f64> = (day - 7..day).filter_map(active_kcal_on).collect();

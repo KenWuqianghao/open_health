@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::external::{read_external, ExternalSleep, ExternalSleepStage, ExternalWorkout, SleepStage};
 use crate::extras::{self, Workout};
-use crate::{read_profile, score_json, sleep_balance, sleep_debt_summary, sleep_metrics, trailing_baseline};
+use crate::{main_night_per_wake_day, read_profile, score_json, sleep_balance, sleep_debt_summary, sleep_metrics, trailing_baseline};
 
 pub const EPOCH_S: i64 = 30;
 const SAME_NIGHT_GAP_S: i64 = 3600;
@@ -86,6 +86,8 @@ pub fn nights(sleep: &ExternalSleep) -> Vec<WatchNight> {
 struct ScoredNight<'a> {
     night: &'a WatchNight,
     wake_day: i64,
+    /// The longest night of its wake day; the others are naps.
+    main: bool,
     asleep_s: i32,
     sleep: Option<scores::Score>,
     rhr_baseline: Option<scores::Stats>,
@@ -119,9 +121,18 @@ impl ScoredNight<'_> {
     }
 }
 
+/// Scores every night. The min HR and SDNN baselines come from the main nights only:
+/// a nap's heart rate is higher than a night's.
 fn score_nights(nights: &[WatchNight], tz: i64, age: f64) -> Vec<ScoredNight<'_>> {
-    let rhr: Vec<Option<f64>> = nights.iter().map(|n| n.min_hr).collect();
-    let hrv: Vec<Option<f64>> = nights.iter().map(|n| n.mean_hrv_sdnn_ms).collect();
+    let wake_day = |n: &WatchNight| extras::local_day(n.end_unix as f64, tz);
+    let mut main = vec![false; nights.len()];
+    for i in main_night_per_wake_day(nights.iter().map(|n| (wake_day(n), (n.end_unix - n.start_unix) as f64))).into_values() {
+        main[i] = true;
+    }
+    let main_nights = || nights.iter().zip(&main).filter(|(_, &m)| m).map(|(n, _)| n);
+    let rhr: Vec<Option<f64>> = main_nights().map(|n| n.min_hr).collect();
+    let hrv: Vec<Option<f64>> = main_nights().map(|n| n.mean_hrv_sdnn_ms).collect();
+    let mut mains_before = 0;
     nights
         .iter()
         .enumerate()
@@ -132,8 +143,9 @@ fn score_nights(nights: &[WatchNight], tz: i64, age: f64) -> Vec<ScoredNight<'_>
                 let n = night.stages.iter().filter(|&&c| c == code).count();
                 (n as f64 / night.stages.len() as f64 * 1000.0).round() / 10.0
             };
-            let rhr_baseline = trailing_baseline(&rhr, i);
-            let hrv_baseline = trailing_baseline(&hrv, i);
+            let rhr_baseline = trailing_baseline(&rhr, mains_before);
+            let hrv_baseline = trailing_baseline(&hrv, mains_before);
+            mains_before += main[i] as usize;
             let sleep = scores::sleep::score_night(scores::sleep::NightInput {
                 asleep_min: Some(asleep_s as f64 / 60.0),
                 in_bed_min: None,
@@ -151,7 +163,8 @@ fn score_nights(nights: &[WatchNight], tz: i64, age: f64) -> Vec<ScoredNight<'_>
             });
             ScoredNight {
                 night,
-                wake_day: extras::local_day(night.end_unix as f64, tz),
+                wake_day: wake_day(night),
+                main: main[i],
                 asleep_s,
                 sleep,
                 rhr_baseline,
@@ -191,14 +204,10 @@ pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Value> {
     let scored = score_nights(&watch_nights, tz, read_profile(db).age);
 
     let mut asleep_by_day: BTreeMap<i64, i32> = BTreeMap::new();
-    let mut main_by_day: BTreeMap<i64, &ScoredNight> = BTreeMap::new();
     for n in &scored {
         *asleep_by_day.entry(n.wake_day).or_default() += n.asleep_s;
-        let main = main_by_day.entry(n.wake_day).or_insert(n);
-        if n.in_bed_s() > main.in_bed_s() {
-            *main = n;
-        }
     }
+    let main_by_day: BTreeMap<i64, &ScoredNight> = scored.iter().filter(|n| n.main).map(|n| (n.wake_day, n)).collect();
 
     let days: serde_json::Map<String, Value> = main_by_day
         .iter()
@@ -285,5 +294,25 @@ mod tests {
         assert_eq!(two.stages.iter().filter(|&&c| c == 2).count(), 840, "a sleep stage wins over an overlapping awake one");
         assert_eq!(two.min_hr, Some(55.0));
         assert_eq!(two.mean_hrv_sdnn_ms, None);
+    }
+
+    #[test]
+    fn a_nap_does_not_raise_the_resting_hr_baseline() {
+        let h = 3600;
+        let mut sleep = ExternalSleep::default();
+        for (day, hr) in [(0, 50.0), (1, 52.0), (2, 54.0), (3, 50.0)] {
+            let bed = day * 24 * h - h;
+            sleep.stages.push(stage(bed, bed + 8 * h, SleepStage::Core));
+            sleep.hr.push((bed + 4 * h, hr));
+        }
+        let nap = 2 * 24 * h + 14 * h;
+        sleep.stages.push(stage(nap, nap + 90 * 60, SleepStage::Core));
+        sleep.hr.push((nap + 1800, 90.0));
+
+        let n = nights(&sleep);
+        let scored = score_nights(&n, 0, 35.0);
+        assert_eq!(scored.len(), 5);
+        assert!(!scored[3].main, "the afternoon sleep is a nap");
+        assert_eq!(scored[4].rhr_baseline.map(|b| b.mean), Some(52.0), "the 90 bpm nap is not in the baseline");
     }
 }

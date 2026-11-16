@@ -866,8 +866,11 @@ struct RootView: View {
             }
             if let plugin {
                 let full = plugin.enrichKeepingWatch(base, previous: previous, progress: progress)
-                HubPusher.shared.schedule(json: built.json, models: full, reason: "foreground")
-                DispatchQueue.main.async { finishLoad(generation, summary: full) }
+                DispatchQueue.main.async {
+                    guard generation == loadGeneration else { return }
+                    HubPusher.shared.schedule(json: built.json, models: full, reason: "foreground")
+                    finishLoad(generation, summary: full)
+                }
             } else {
                 HubPusher.shared.schedule(json: built.json, models: previous ?? base, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: nil) }

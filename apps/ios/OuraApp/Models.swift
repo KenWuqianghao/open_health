@@ -320,6 +320,14 @@ extension Summary {
         return set.sorted(by: >)
     }
 
+    /// The days with ring data. A view that shows ring fields for one day picks its day here.
+    var ringDays: [String] {
+        var set = Set(activity_profile.keys)
+        for n in nights { if let w = wakeYmd(n) { set.insert(w) } }
+        if let scored = scores?.days.keys { set.formUnion(scored) }
+        return set.sorted(by: >)
+    }
+
     var scoredDays: Set<String> {
         Set(scores.map { Array($0.days.keys) } ?? []).union(watch?.scores.map { Array($0.days.keys) } ?? [])
     }

@@ -154,8 +154,9 @@ The summary JSON has every key for these features, and the desktop CLI has
 `oura summary`, `oura export`, `oura journal` and `oura demo-db`. The web dashboard
 (`app.js`) does not show them yet: breathing rate and temperature deviation, naps,
 battery history, the workout list with its sources, daytime stress and resilience,
-bedtime guidance, reports, tags and correlations, the cycle estimate, rest mode.
-See `docs/journal-and-insights.md` for the keys.
+bedtime guidance, reports, tags and correlations, the cycle estimate, rest mode, and
+the whole watch summary (`watch_summary_json`): the Apple Watch sleep and readiness
+scores in `scores.days`, and the measured VO₂ max in `fitness`. See `docs/journal-and-insights.md` for the keys.
 
 These are iOS-only by nature: notifications, widgets, Siri, live heart rate, the
 ring finder, the Apple Health workout import, restore from the hub.

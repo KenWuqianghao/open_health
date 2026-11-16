@@ -151,7 +151,7 @@ struct WorkoutDetailView: View {
 
     private var sourceText: String {
         switch w.source {
-        case "health": return "From Apple Health. When it reports more active energy than the ring measured in this time, the day's energy and Activity score get the difference."
+        case "health": return "From Apple Health, as Apple Health recorded it. It does not change the ring's energy or Activity score."
         case "manual": return "You added this workout. Without an energy value, the app estimates it from the type of activity and your weight."
         case "ring": return "Found by the activity model on this iPhone from the ring's movement data."
         default: return "Found from the ring's movement data: 15 minutes or more at moderate effort or harder. The ring cannot tell the type of activity."

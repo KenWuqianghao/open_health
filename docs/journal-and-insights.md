@@ -16,7 +16,7 @@ open_oura; see `docs/algorithms/insights.md` there.
 | `profile.json` | the client | age, sex, height, weight, ring size, activity goal |
 | `feature_modes.json` | the client | the last known mode of each ring feature |
 | `journal.json` | `oura_summary::journal::apply` | tags, manual workouts, period days, rest mode |
-| `external.json` | the client | workouts and measured VO2 max from Apple Health |
+| `external.json` | the client | Apple Watch sleep, heart rate and HRV, workouts and measured VO2 max from Apple Health, for the watch summary |
 
 The ring knows nothing about the journal and the external data. The hub keeps a
 copy of the ring rows only, so a restore from the hub does not restore them.
@@ -45,7 +45,7 @@ stored one time.
 | `nights[].breath`, `.temp_dev`, `.kind`, `.deep_min`, `.light_min`, `.rem_min`, `.awake_min` | breathing rate, temperature deviation, `main` or `nap`, stage minutes |
 | `vitals.breath`, `vitals.spo2`, `vitals.temp_dev` | series, latest, baseline and `delta` of the main sleeps |
 | `device.battery` | `latest`, `history` (14 days), `charging`, `rate_pct_per_day`, `days_left` |
-| `workouts[]` | one list from the ring, Apple Health and the journal, with `source` |
+| `workouts[]` | one list from the ring and the journal, with `source`. Apple Health workouts are in the watch summary |
 | `stress` | daytime stress zones for 14 days, and a 48-hour timeline |
 | `resilience` | score, level and the three parts |
 | `guidance` | `bedtime` window and `regularity` (SRI, clock spread, chronotype) |
@@ -54,17 +54,17 @@ stored one time.
 | `correlations` | for each tag, the night after it against the other nights |
 | `cycle` | cycle day, phase, next period (null without a logged period) |
 | `journal`, `rest_mode` | the journal, and the days in rest mode |
-| `fitness.source` | `measured` (Apple Health) or `formula` |
+| `fitness.source` | `formula` (age, sex and weight). The measured VO2 max is in the watch summary |
 
 ### Rules that are in the summary, not in a client
 
 - **Main sleep and nap.** The longest sleep of a wake day with 3 hours or more is the
   main sleep. All other sleep periods are naps. Vitals with decimals use main sleeps
   only.
-- **Workouts.** A ring session that overlaps an entry from Apple Health or the
-  journal by half or more is dropped. When an entry reports more active energy than
-  the ring measured in its time, the day gets the difference. Thus a workout with
-  the ring on the finger does not count two times.
+- **Workouts.** A ring session that overlaps a journal entry by half or more is
+  dropped. When the entry reports more active energy than the ring measured in its
+  time, the day gets the difference. Thus a workout with the ring on the finger does
+  not count two times. Apple Health workouts do not change the ring summary.
 - **Rest mode.** A day in rest mode has no Activity score. The readiness score of
   that day does not use the activity contributors.
 - **Ring sessions without the model.** A build without the activity model gets
@@ -89,7 +89,7 @@ stored one time.
 ## Demo data
 
 `oura --db demo.db demo-db demo.db --days 45` writes a database with a complete
-history, a journal and Apple Health workouts. The iOS app offers the same data in
+history, a journal and Apple Health data (`external.json`). The iOS app offers the same data in
 Settings when no ring is paired and no database exists. The demo events carry the
 decoded JSON of the real decoders, but their bodies are counters: do not run
 `redecode` on a demo database.

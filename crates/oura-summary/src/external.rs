@@ -1,7 +1,7 @@
 //! Data from other sources that the client gives to the summary: workouts and
 //! measured values from Apple Health (an Apple Watch, other apps).
 //!
-//! The client writes `external.json` next to the DB. The summary only reads it.
+//! The client writes `external.json` next to the DB. Only the watch summary reads it.
 
 use std::path::{Path, PathBuf};
 

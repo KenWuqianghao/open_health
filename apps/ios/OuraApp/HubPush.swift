@@ -368,7 +368,6 @@ final class HubPusher: ObservableObject {
     /// The summaries alone, after the models ran.
     func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async {
         guard isConfigured else { return }
-        await update { $0.lastError = nil }
         await sendSummaries(json, models: models, reason: reason, deadline: deadline)
     }
 
@@ -454,6 +453,12 @@ final class HubPusher: ObservableObject {
         }
         await update { $0.running = false; if pages > 0 { $0.lastEventsAt = Date() } }
         return true
+    }
+
+    /// A HealthKit wake: Apple Health alone, as its own pass with a clean error.
+    func pushHealthPass(reason: String, deadline: TimeInterval) async {
+        await update { $0.lastError = nil }
+        await pushHealth(reason: reason, deadline: deadline)
     }
 
     /// Apple Health samples (the Watch) that changed since the last run, in pages.

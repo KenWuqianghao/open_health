@@ -78,19 +78,33 @@ pub(crate) struct NightFact {
     pub main: bool,
 }
 
-/// Mark the main sleep of each wake day. Call once after all facts exist.
-pub(crate) fn mark_main(nights: &mut [NightFact]) {
+/// The longest sleep of each wake day, as `wake_day -> index`; the earlier one on a
+/// tie. `sleeps` gives `(wake_day, in_bed)` per sleep.
+pub(crate) fn longest_per_wake_day(sleeps: impl IntoIterator<Item = (i64, f64)>) -> BTreeMap<i64, usize> {
     let mut longest: BTreeMap<i64, (usize, f64)> = BTreeMap::new();
-    for (i, n) in nights.iter().enumerate() {
-        if n.in_bed_min < 180.0 {
-            continue;
-        }
-        if longest.get(&n.wake_day).is_none_or(|l| n.in_bed_min > l.1) {
-            longest.insert(n.wake_day, (i, n.in_bed_min));
+    for (i, (day, in_bed)) in sleeps.into_iter().enumerate() {
+        if longest.get(&day).is_none_or(|&(_, l)| in_bed > l) {
+            longest.insert(day, (i, in_bed));
         }
     }
-    for (i, _) in longest.values() {
-        nights[*i].main = true;
+    longest.into_iter().map(|(day, (i, _))| (day, i)).collect()
+}
+
+/// Which sleeps are main sleeps: the longest of its wake day, with 3 hours or more
+/// in bed. Other sleeps are naps. `sleeps` gives `(wake_day, in_bed_min)` per sleep.
+pub(crate) fn main_sleeps(sleeps: &[(i64, f64)]) -> Vec<bool> {
+    let mut main = vec![false; sleeps.len()];
+    for i in longest_per_wake_day(sleeps.iter().copied()).into_values() {
+        main[i] = sleeps[i].1 >= 180.0;
+    }
+    main
+}
+
+/// Mark the main sleep of each wake day. Call once after all facts exist.
+pub(crate) fn mark_main(nights: &mut [NightFact]) {
+    let main = main_sleeps(&nights.iter().map(|n| (n.wake_day, n.in_bed_min)).collect::<Vec<_>>());
+    for (night, main) in nights.iter_mut().zip(main) {
+        night.main = main;
     }
 }
 

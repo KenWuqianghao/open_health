@@ -875,16 +875,6 @@ fn activity_day_stats(
     days
 }
 
-fn main_night_per_wake_day(nights: impl IntoIterator<Item = (i64, f64)>) -> std::collections::BTreeMap<i64, usize> {
-    let mut main: std::collections::BTreeMap<i64, (usize, f64)> = Default::default();
-    for (i, (day, in_bed)) in nights.into_iter().enumerate() {
-        if main.get(&day).is_none_or(|&(_, longest)| in_bed > longest) {
-            main.insert(day, (i, in_bed));
-        }
-    }
-    main.into_iter().map(|(day, (i, _))| (day, i)).collect()
-}
-
 fn trailing_baseline(per_night: &[Option<f64>], i: usize) -> Option<Stats> {
     let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
     Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())
@@ -1688,7 +1678,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
     let active_kcal_on = |day: i64| daily.get(&ymd_of(day)).map(|e| e.0);
     let mean_of = |vals: &[f64]| (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64);
     let mut score_days: std::collections::BTreeMap<i64, serde_json::Map<String, Value>> = Default::default();
-    let main_seeds = main_night_per_wake_day(score_seeds.iter().map(|s| (s.wake_day, s.in_bed_s)));
+    let main_seeds = extras::longest_per_wake_day(score_seeds.iter().map(|s| (s.wake_day, s.in_bed_s)));
     for (&day, &i) in &main_seeds {
         let seed = &score_seeds[i];
         let (sleep_balance_ratio, sleep_balance_days) = sleep_balance(&asleep_by_day, day);

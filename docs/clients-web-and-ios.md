@@ -23,8 +23,10 @@ There are two summaries. Each has a top-level `kind`:
 - **Ring summary** (`build_summary`, `"kind": "ring"`): ring data and the journal only.
 - **Watch summary** (`build_watch_summary`, `"kind": "watch"`): only the Apple Health data in
   `external.json` (Apple Watch sleep stages, heart rate, HRV SDNN, workouts, VO₂ max). It
-  scores every watch night. iOS gets it through `watch_summary_json()`; `oura watch-summary`
-  prints it. No value in one summary comes from the other source.
+  scores every watch night. Without Apple Watch data it has no nights, scores, workouts or
+  VO₂ max, and the phone still pushes it, so the hub stops showing old watch values.
+  iOS gets it through `watch_summary_json()`; `oura watch-summary` prints it. No value in
+  one summary comes from the other source.
 
 The non-model math is the **ported ecore ground truth** from `crates/oura-analysis`
 (`ported::{spo2, temperature, metabolic, baseline}`): SpO₂ calibration, nightly skin

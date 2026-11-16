@@ -2076,7 +2076,7 @@ mod tests {
     #[test]
     fn watch_summary_scores_every_watch_night() {
         let (db, today, ring_last_day) = ring_and_watch("watch");
-        let s = build_watch_summary(&db, 2).unwrap().expect("the watch has nights");
+        let s = build_watch_summary(&db, 2).unwrap();
         assert_eq!(s["kind"], "watch");
         assert_eq!(s["nights"].as_array().unwrap().len(), 22);
         assert_eq!(s["scores"]["latest"], extras::ymd(today));
@@ -2108,7 +2108,11 @@ mod tests {
         assert!(s["workouts"].as_array().unwrap().iter().all(|w| w["source"] == "health"));
 
         std::fs::remove_file(external::external_path(&db)).unwrap();
-        assert_eq!(build_watch_summary(&db, 2).unwrap(), None, "no Apple Watch data, no watch summary");
+        let empty = build_watch_summary(&db, 2).unwrap();
+        assert_eq!(empty["kind"], "watch");
+        assert_eq!(empty["nights"], json!([]), "no Apple Watch data gives an empty watch summary");
+        assert_eq!(empty["scores"]["latest"], Value::Null);
+        assert_eq!(empty["fitness"], Value::Null);
         std::fs::write(external::external_path(&db), "{not json").unwrap();
         assert!(build_watch_summary(&db, 2).is_err(), "a broken external.json is an error, not an empty summary");
         std::fs::remove_dir_all(db.parent().unwrap()).ok();

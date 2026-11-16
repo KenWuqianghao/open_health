@@ -125,6 +125,9 @@ actor HealthExportEngine {
 
         // Epoch migration: purge everything the old exporter wrote, start clean.
         if state.epoch != epoch {
+            // Without a summary the plans have no stages or workouts, and finalized
+            // days would never be written again: purge on a pass that has one.
+            if summary == nil && !state.epoch.isEmpty { return outcome }
             progress("removing samples from an older exporter…")
             do {
                 let removed = try await purgeAll()

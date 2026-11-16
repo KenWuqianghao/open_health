@@ -609,7 +609,13 @@ fn normalize_bed_periods(
     let mut joined: Vec<BedPeriod> = Vec::new();
     for period in periods {
         match joined.last_mut().filter(|previous| joinable(previous, &period)) {
-            Some(previous) => join(previous, &period),
+            Some(previous) => {
+                let ends_awake = period.ring_ended_awake && period.raw_end_ds >= previous.raw_end_ds;
+                join(previous, &period);
+                if ends_awake {
+                    previous.end_ds = period.end_ds;
+                }
+            }
             None => joined.push(period),
         }
     }
@@ -741,17 +747,19 @@ fn ring_hypnograms(runs: &[nights::RingRun], nights: &[Night]) -> Vec<(i64, Valu
         let cells = (span_ds / nights::RING_STAGE_EPOCH_DS).max(1) as usize;
         let mut stages = vec![4i64; cells];
         let mut painted = false;
+        let cell = |at: i64| (((at - night.start_ds) / nights::RING_STAGE_EPOCH_DS) as usize).min(cells - 1);
         for run in runs {
-            let end_ds = run.start_ds + run.codes.len() as i64 * nights::RING_STAGE_EPOCH_DS;
-            if end_ds <= night.start_ds || run.start_ds >= night.end_ds {
+            if run.end_ds <= night.start_ds || run.start_ds >= night.end_ds {
                 continue;
             }
+            // a newer analysis replaces the whole window of an older one
+            stages[cell(run.start_ds.max(night.start_ds))..=cell(run.end_ds.min(night.end_ds) - 1)].fill(4);
             for (i, code) in run.codes.iter().enumerate() {
                 let at = run.start_ds + i as i64 * nights::RING_STAGE_EPOCH_DS;
                 if at < night.start_ds || at >= night.end_ds {
                     continue;
                 }
-                stages[(((at - night.start_ds) / nights::RING_STAGE_EPOCH_DS) as usize).min(cells - 1)] = *code;
+                stages[cell(at)] = *code;
                 painted = true;
             }
         }
@@ -2240,6 +2248,21 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_analysis_replaces_the_padding_of_an_older_one() {
+        let e = nights::RING_STAGE_EPOCH_DS;
+        let night = Night { start_ds: 0, end_ds: 10 * e, ..Default::default() };
+        let events = vec![
+            bedtime_event(20 * e, 0, 10 * e),
+            page_event(20 * e + 1, 0, &[2, 2, 1, 1, 1, 1, 1, 1, 1, 1]),
+            bedtime_event(30 * e, 0, 10 * e),
+            page_event(30 * e + 1, 0, &[2, 2, 1, 1, 1, 1, 1, 1, 1, 1]),
+            summary_2_event(30 * e + 2, [0, 2, 0]),
+        ];
+        let out = ring_hypnograms(&nights::ring_runs(&events), &[night]);
+        assert_eq!(out[0].1["stages"], json!([2, 2, 4, 4, 4, 4, 4, 4, 4, 4]));
+    }
+
+    #[test]
     fn ring_runs_cut_the_zero_padding_that_sleep_summary_2_does_not_count() {
         let e = nights::RING_STAGE_EPOCH_DS;
         let events = vec![
@@ -2400,6 +2423,16 @@ mod tests {
         assert_eq!((got.len(), got[0].start_ds, got[0].end_ds), (1, 0, 5 * hour), "a sleep in two parts");
         let got = merge(vec![bed(0, 5 * hour), bed(hour, 6 * hour), bed(3 * hour, 8 * hour)]);
         assert_eq!((got.len(), got[0].start_ds, got[0].end_ds), (1, 3 * hour, 8 * hour), "a chain");
+    }
+
+    #[test]
+    fn an_extension_stops_at_a_later_window_that_ended_awake() {
+        let hour = 3600 * 10;
+        let packets: Vec<(i64, i64)> = (5 * hour..=8 * hour).step_by(10 * 60 * 10).map(|ds| (ds, 1)).collect();
+        let periods = vec![bed(0, 5 * hour), BedPeriod { ring_ended_awake: true, ..bed(65 * hour / 10, 7 * hour) }];
+        let got = normalize_bed_periods(periods, &packets, &[], |ds, _| ds as f64 / 10.0);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].start_ds, got[0].end_ds), (0, 7 * hour));
     }
 
     #[test]

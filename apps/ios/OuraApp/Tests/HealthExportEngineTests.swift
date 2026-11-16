@@ -175,16 +175,28 @@ final class HealthExportEngineTests: XCTestCase {
         XCTAssertTrue(HealthExportStateStore.load().deferredForUnlock)
     }
 
-    func testEpochMismatchPurgesEverythingFirst() async {
+    func testEpochMismatchPurgesEverythingFirst() async throws {
         let store = FakeHealthStore()
         let eng = engine(store)
         var st = HealthExportState(); st.epoch = "old"; st.exportThroughYmd = "2025-12-31"
         HealthExportStateStore.save(st)
         let env = envelope([day("2026-01-01", offsetDays: 0, finalized: true, fp: "a")])
+        // without a summary the purge waits
         _ = await eng.run(.sync, envelope: env, summary: nil, includeBasal: false, epoch: "new") { _ in }
+        XCTAssertTrue(store.deletes.isEmpty)
+        XCTAssertEqual(HealthExportStateStore.load().epoch, "old")
+        _ = await eng.run(.sync, envelope: env, summary: try emptySummary(), includeBasal: false, epoch: "new") { _ in }
         // unbounded deletes (window nil) for every type = the purge
         XCTAssertTrue(store.deletes.contains { $0.1 == nil })
         XCTAssertEqual(HealthExportStateStore.load().epoch, "new")
+    }
+
+    private func emptySummary() throws -> Summary {
+        let root: [String: Any] = [
+            "nights": [], "activity_profile": [:], "activity_daily": [:],
+            "vitals": ["hrv": ["series": []], "rhr": ["series": []]],
+        ]
+        return try JSONDecoder().decode(Summary.self, from: JSONSerialization.data(withJSONObject: root))
     }
 
     func testUnionMergesOverlappingWindows() {

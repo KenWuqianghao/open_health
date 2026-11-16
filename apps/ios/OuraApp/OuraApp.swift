@@ -260,18 +260,22 @@ struct AllDaysView: View {
             NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
-                    let present = ScoreKind.allCases.compactMap { k in s.shownScore(k, day: day).map { (k, $0.score.score) } }
+                    let present = ScoreKind.allCases.compactMap { k in s.shownScore(k, day: day).map { (k, $0) } }
                     if !present.isEmpty {
                         // one pill per score on its own line; a column at large text
-                        let pill = { (kind: ScoreKind, v: Double) in
-                            HStack(spacing: 4) {
+                        let pill = { (kind: ScoreKind, shown: (score: DailyScore, fromWatch: Bool)) in
+                            let v = Int(shown.score.score.rounded())
+                            return HStack(spacing: 4) {
                                 Image(systemName: kind.icon).font(.caption2)
-                                Text("\(Int(v.rounded()))").font(.caption.weight(.semibold)).monospacedDigit()
+                                Text("\(v)").font(.caption.weight(.semibold)).monospacedDigit()
+                                if shown.fromWatch {
+                                    Image(systemName: "applewatch").font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                             .foregroundStyle(kind.tint)
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             .background(kind.tint.opacity(0.12), in: Capsule())
-                            .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
+                            .accessibilityLabel("\(kind.title) \(v)\(shown.fromWatch ? ", from Apple Watch" : "")")
                         }
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 6) { ForEach(present, id: \.0) { pill($0.0, $0.1).fixedSize() } }

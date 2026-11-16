@@ -522,7 +522,7 @@ extension Summary {
     func highlight(for day: String) -> String? {
         var sentences: [String] = []
         var first: String?
-        if let r = latestScore(.readiness, upTo: day)?.score.score {
+        if let r = latestRingScore(.readiness, upTo: day)?.score.score {
             switch r {
             case 85...: first = "You're well recovered"
             case 70..<85: first = "You're reasonably recovered"
@@ -547,6 +547,14 @@ extension Summary {
     func latestScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore, fromWatch: Bool)? {
         scoredDays.filter { $0 <= day }.sorted(by: >)
             .lazy.compactMap { d in shownScore(kind, day: d).map { (d, $0.score, $0.fromWatch) } }.first
+    }
+
+    /// `latestScore` without the watch: for the widget and the highlight, which have
+    /// no Apple Watch mark.
+    func latestRingScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {
+        guard let days = scores?.days else { return nil }
+        return days.keys.filter { $0 <= day }.sorted(by: >)
+            .lazy.compactMap { d in days[d]?.score(kind).map { (d, $0) } }.first
     }
 }
 

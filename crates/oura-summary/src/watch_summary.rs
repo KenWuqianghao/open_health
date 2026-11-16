@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use oura_analysis::scores;
@@ -8,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::external::{read_external, ExternalSleep, ExternalSleepStage, ExternalWorkout, SleepStage};
 use crate::extras::{self, Workout};
-use crate::{read_profile, score_json, sleep_balance, sleep_debt_summary, sleep_metrics, trailing_baseline};
+use crate::{now_unix_s, read_profile, score_json, sleep_balance, sleep_debt_summary, sleep_metrics, trailing_baseline};
 
 pub const EPOCH_S: i64 = 30;
 const SAME_NIGHT_GAP_S: i64 = 3600;
@@ -188,6 +187,10 @@ fn health_workouts(workouts: &[ExternalWorkout]) -> Vec<Workout> {
 /// The watch summary JSON. `tz` is hours from UTC. The only other input is the
 /// age in `profile.json`, which the sleep score needs.
 pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Value> {
+    build(db, tz, now_unix_s())
+}
+
+fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Value> {
     let external = read_external(db);
     let watch_nights = nights(&external.sleep);
     let scored = score_nights(&watch_nights, tz, read_profile(db).age);
@@ -230,11 +233,10 @@ pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Value> {
             "source_name": m.source,
         })
     });
-    let generated_at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
     Ok(json!({
         "kind": "watch",
-        "generated_at": generated_at,
+        "generated_at": now_unix_s as i64,
         "tz": tz,
         "nights": scored.iter().rev().map(ScoredNight::to_json).collect::<Vec<_>>(),
         "scores": {

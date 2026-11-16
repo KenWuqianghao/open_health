@@ -1141,7 +1141,7 @@ fn now_unix_s() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as f64).unwrap_or(0.0)
 }
 
-fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Value, Vec<extras::DayFact>)> {
+fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now_unix_s: f64) -> Result<(Value, Vec<extras::DayFact>)> {
     let db_abs = std::fs::canonicalize(db).unwrap_or_else(|_| {
         std::env::current_dir()
             .map(|d| d.join(db))
@@ -1597,7 +1597,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
         }
     }
 
-    let today_idx = (now as i64 + tz * 3600).div_euclid(86_400);
+    let today_idx = (now_unix_s as i64 + tz * 3600).div_euclid(86_400);
     let sleep_windows: Vec<(i64, i64)> = nights
         .iter()
         .map(|nt| {
@@ -1896,7 +1896,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
             .filter(|(at, _)| *at as f64 >= newest_point)
             .map(|(_, progress)| *progress);
     }
-    let battery_json = extras::battery(&battery_points, charging_progress, now);
+    let battery_json = extras::battery(&battery_points, charging_progress, now_unix_s);
     if let Some(latest) = battery_json["latest"]["pct"].as_f64() {
         // a read over the link can be newer than the ring's own battery events
         battery = Some((latest as i64, battery.map_or(0, |b| b.1)));
@@ -1912,7 +1912,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
         "mac": dev.as_ref().map(|d| d.4.clone()).filter(|s| !s.is_empty()),
         "synced": synced_unix.map(|s| date_label(s, tz)),
         "synced_hm": synced_unix.map(|s| hm(s, tz)),
-        "fresh_hours": synced_unix.map(|s| ((now - s) / 3600.0 * 10.0).round() / 10.0),
+        "fresh_hours": synced_unix.map(|s| ((now_unix_s - s) / 3600.0 * 10.0).round() / 10.0),
         "days_of_data": ((clock.total_span_ds() as f64 / 10.0 / 86400.0) * 10.0).round() / 10.0,
         "total_events": events.len(),
         "nights": nights.len(),
@@ -1974,7 +1974,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
 
     let summary = json!({
         "kind": "ring",
-        "generated_at": now,
+        "generated_at": now_unix_s,
         "tz": tz,
         "digest": digest,
         "device": device,

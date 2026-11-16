@@ -25,7 +25,7 @@ extension Summary {
     }
 
     func scoreSeries(_ kind: ScoreKind) -> [DatedValue] {
-        dated((scores?.days ?? [:]).compactMap { day, d in d.score(kind).map { (day, $0.score) } })
+        dated(scoredDays.compactMap { day in shownScore(kind, day: day).map { (day, $0.score.score) } })
     }
 
     /// Hours in bed per wake date (the longest sleep of each morning).

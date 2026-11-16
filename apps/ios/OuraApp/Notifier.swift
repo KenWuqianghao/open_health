@@ -103,9 +103,9 @@ enum NotificationRules {
         }
 
         // the scores of this morning, once per day
-        if isOn(.scoresReady), let readiness = s.scores?.days[today]?.readiness, plan.state.scoresDay != today {
-            let sleep = s.scores?.days[today]?.sleep.map { " Sleep score \(Int($0.score.rounded()))." } ?? ""
-            let score = Int(readiness.score.rounded())
+        if isOn(.scoresReady), let readiness = s.shownScore(.readiness, day: today), plan.state.scoresDay != today {
+            let sleep = s.shownScore(.sleep, day: today).map { " Sleep score \(Int($0.score.score.rounded()))." } ?? ""
+            let score = Int(readiness.score.score.rounded())
             plan.now.append(.init(id: "scores-\(today)", title: "Readiness \(score), \(Snapshot.band(score))",
                                   body: (s.highlight(for: today) ?? "Your morning scores are ready.") + sleep))
             plan.state.scoresDay = today

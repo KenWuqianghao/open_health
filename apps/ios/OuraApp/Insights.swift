@@ -348,10 +348,15 @@ extension Summary {
         rulesIllness?.value?.nightsignal.flatMap { $0.current ? $0 : nil }
     }
 
-    /// Every workout, newest first. The on-device activity model's sessions replace
-    /// the rule-based ring sessions of the JSON; entries from Apple Health and the
-    /// journal win over a ring session of the same time.
+    /// Every workout, newest first: the ring summary's, then the watch summary's,
+    /// each with its source. The on-device activity model's sessions replace the
+    /// rule-based ring sessions of the ring summary; a journal entry wins over a ring
+    /// session of the same time.
     var mergedWorkouts: [WorkoutEntry] {
+        (ringWorkouts + (watch?.workouts?.value ?? [])).sorted { $0.start_unix > $1.start_unix }
+    }
+
+    private var ringWorkouts: [WorkoutEntry] {
         let json = entries?.value ?? []
         let model = workouts.filter { $0.isWorkout >= 0.5 }
         guard !model.isEmpty else { return json }
@@ -371,7 +376,7 @@ extension Summary {
                                 start_unix: a, end_unix: b, duration_min: Double(w.durationMin),
                                 label: w.label, source: "ring", source_name: "Ring")
         }
-        return (others + fromModel).sorted { $0.start_unix > $1.start_unix }
+        return others + fromModel
     }
 
     func mergedWorkouts(on day: String) -> [WorkoutEntry] {

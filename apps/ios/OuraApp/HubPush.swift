@@ -33,10 +33,13 @@ enum HubSettings {
             if let v = newValue, !v.isEmpty { Keychain.save(v, account: tokenAccount) } else { Keychain.delete(account: tokenAccount) }
         }
     }
-    /// SHA-256 of the last summary body the hub accepted; an unchanged one is not sent again.
-    static var lastSummarySha: String? {
-        get { d.string(forKey: shaKey) }
-        set { d.set(newValue, forKey: shaKey) }
+    /// SHA-256 of the last body of each summary kind the hub accepted; an unchanged one
+    /// is not sent again.
+    static func lastSummarySha(_ kind: SummaryKind) -> String? {
+        d.string(forKey: "\(shaKey).\(kind.rawValue)")
+    }
+    static func setLastSummarySha(_ sha: String?, _ kind: SummaryKind) {
+        d.set(sha, forKey: "\(shaKey).\(kind.rawValue)")
     }
     /// The `oura-store` replication cursor: ids of the last rows the hub accepted.
     static var afterEventId: Int64 {
@@ -51,7 +54,7 @@ enum HubSettings {
     static func resetReplication() {
         afterEventId = 0
         afterReadingId = 0
-        lastSummarySha = nil
+        for kind in SummaryKind.allCases { setLastSummarySha(nil, kind) }
     }
 
     /// `<base>/<path>` for a usable http(s) base URL, else nil.
@@ -144,7 +147,25 @@ enum HubError: LocalizedError, Equatable {
     }
 }
 
-/// The summary body: the full `build_summary` JSON from the shared core with the
+/// The two summaries that `ingest/summary` takes. The JSON of each has its `kind`.
+enum SummaryKind: String, CaseIterable {
+    case ring, watch
+}
+
+/// The JSON strings of one summary build, as the shared core returned them.
+struct SummaryJson {
+    var ring: String
+    var watch: String
+
+    func json(_ kind: SummaryKind) -> String {
+        switch kind {
+        case .ring: return ring
+        case .watch: return watch
+        }
+    }
+}
+
+/// A summary body: the full `build_summary` JSON from the shared core with the
 /// on-device model results folded in. The Swift `Summary` struct drops fields the
 /// agent tools need (`generated_at`, `tz`, night `metrics`), so the raw JSON is the
 /// base and is never re-encoded from the struct.
@@ -303,13 +324,13 @@ final class HubPusher: ObservableObject {
         await update { $0.lastError = text; $0.running = false }
     }
 
-    /// Everything after a sync: the summary, then the new raw rows. `deadline` bounds
+    /// Everything after a sync: the summaries, then the new raw rows. `deadline` bounds
     /// the whole call; a page that did not go out is sent next time.
-    func pushAll(rawJson: String?, models: Summary?, reason: String, deadline: TimeInterval) async {
+    func pushAll(json: SummaryJson?, models: Summary?, reason: String, deadline: TimeInterval) async {
         guard isConfigured else { return }
         let start = Date()
-        if let rawJson {
-            await pushSummary(rawJson: rawJson, models: models, reason: reason, timeout: min(deadline, 20))
+        if let json {
+            await pushSummaries(json, models: models, reason: reason, timeout: min(deadline, 20))
         }
         var left = deadline - Date().timeIntervalSince(start)
         if left > 2 { await pushEvents(reason: reason, deadline: left) }
@@ -318,9 +339,9 @@ final class HubPusher: ObservableObject {
     }
 
     /// Fire-and-forget from the UI thread or a dispatch queue.
-    func schedule(rawJson: String?, models: Summary?, reason: String) {
+    func schedule(json: SummaryJson?, models: Summary?, reason: String) {
         Task.detached(priority: .utility) {
-            await self.pushAll(rawJson: rawJson, models: models, reason: reason, deadline: 60)
+            await self.pushAll(json: json, models: models, reason: reason, deadline: 60)
         }
     }
 
@@ -329,7 +350,7 @@ final class HubPusher: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let built = Core.baseWithJson()
             let models = SummaryCache.load() ?? built.summary
-            await self.pushAll(rawJson: built.json, models: models, reason: "manual", deadline: 120)
+            await self.pushAll(json: built.json, models: models, reason: "manual", deadline: 120)
         }
     }
 
@@ -350,26 +371,40 @@ final class HubPusher: ObservableObject {
         pushNow()
     }
 
+    /// The ring summary with the model results folded in, then the watch summary.
     @discardableResult
-    func pushSummary(rawJson: String, models: Summary?, reason: String, timeout: TimeInterval) async -> Bool {
+    func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, timeout: TimeInterval) async -> Bool {
+        var sent = true
+        for kind in SummaryKind.allCases {
+            let ok = await pushSummary(kind, rawJson: json.json(kind), models: kind == .ring ? models : nil,
+                                       reason: reason, timeout: timeout)
+            sent = sent && ok
+        }
+        return sent
+    }
+
+    @discardableResult
+    func pushSummary(_ kind: SummaryKind, rawJson: String, models: Summary?, reason: String,
+                     timeout: TimeInterval) async -> Bool {
+        let what = "\(kind.rawValue) summary"
         let t: (summary: URL, events: URL, health: URL, token: String)
-        do { t = try targets() } catch { await fail(error, "summary"); return false }
+        do { t = try targets() } catch { await fail(error, what); return false }
         let body: Data
-        do { body = try HubPayload.build(rawJson: rawJson, models: models) } catch { await fail(error, "summary"); return false }
+        do { body = try HubPayload.build(rawJson: rawJson, models: models) } catch { await fail(error, what); return false }
         let sha = HubPayload.sha256(body)
-        if sha == HubSettings.lastSummarySha, reason != "manual" {
-            dlog("hub", "summary unchanged, not sent (\(reason))")
+        if sha == HubSettings.lastSummarySha(kind), reason != "manual" {
+            dlog("hub", "\(what) unchanged, not sent (\(reason))")
             return true
         }
         await update { $0.running = true; $0.lastError = nil }
         do {
             let reply = try await HubPushEngine.send(body: body, url: t.summary, token: t.token, timeout: timeout)
-            HubSettings.lastSummarySha = sha
-            dlog("hub", "summary sent: \(body.count) B, stored=\(reply["stored"] ?? "?") (\(reason))")
+            HubSettings.setLastSummarySha(sha, kind)
+            dlog("hub", "\(what) sent: \(body.count) B, stored=\(reply["stored"] ?? "?") (\(reason))")
             await update { $0.running = false; $0.lastSummaryAt = Date() }
             return true
         } catch {
-            await fail(error, "summary")
+            await fail(error, what)
             return false
         }
     }

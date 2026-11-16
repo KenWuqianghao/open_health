@@ -36,7 +36,7 @@ enum AppHooks {
         // 2. The summary cache, so a widget-less relaunch shows fresh numbers and the
         //    exporter has stages/workouts to match. Skipped when the budget is short.
         var summary: Summary?
-        var rawJson: String?
+        var summaryJson: SummaryJson?
         // The last summary that carries model results, for the hub push below.
         let previousFull = SummaryCache.load()
         if policy.refreshSummary {
@@ -48,7 +48,7 @@ enum AppHooks {
             if built.summary.error == nil {
                 SummaryCache.save(built.summary)
                 summary = built.summary
-                rawJson = built.json
+                summaryJson = built.json
             }
             dlog("hooks", "summary rebuilt in \(String(format: "%.1f", SyncSettings.lastSummaryBuildSeconds))s")
             // The widgets and the notifications follow every new summary. A plugin
@@ -67,7 +67,7 @@ enum AppHooks {
         }
         // 4. The hub: the summary (last model results folded in) and the new raw rows.
         //    A refresh task has about 22 s in all; the deadline keeps the push inside it.
-        await HubPusher.shared.pushAll(rawJson: rawJson, models: previousFull ?? summary, reason: trigger.rawValue,
+        await HubPusher.shared.pushAll(json: summaryJson, models: previousFull ?? summary, reason: trigger.rawValue,
                                        deadline: trigger == .bgRefresh ? 8 : 40)
         // 5. Models: only with a generous budget and a healthy device. The foreground
         //    path runs them from RootView.load instead.
@@ -76,8 +76,8 @@ enum AppHooks {
             SummaryCache.save(full)
             Notifier.shared.evaluate(full)
             await HealthExporter.shared.run(.modelsUpdated, summary: full)
-            if let rawJson {
-                await HubPusher.shared.pushSummary(rawJson: rawJson, models: full, reason: "models", timeout: 20)
+            if let summaryJson {
+                await HubPusher.shared.pushSummary(.ring, rawJson: summaryJson.ring, models: full, reason: "models", timeout: 20)
             }
         }
     }

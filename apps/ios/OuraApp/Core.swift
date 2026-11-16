@@ -47,9 +47,10 @@ enum Core {
     /// shared-core JSON — safe to compute on a background queue and show immediately.
     static func base() -> Summary { baseWithJson().summary }
 
-    /// `base()` plus the JSON string it was decoded from. The hub push sends the
-    /// string: the Swift struct drops fields the agent tools read.
-    static func baseWithJson() -> (summary: Summary, json: String) {
+    /// `base()` plus the JSON strings of the ring and the watch summary it was decoded
+    /// from. The hub push sends the strings: the Swift structs drop fields the agent
+    /// tools read.
+    static func baseWithJson() -> (summary: Summary, json: SummaryJson) {
         let path = DB.readPath()   // synced DB if present, else the bundled seed
         // the phone's actual UTC offset, so night labels / sleep windows / digest
         // timing match the wearer's local clock — not a hardcoded constant. The whole
@@ -59,9 +60,11 @@ enum Core {
         let secs = TimeZone.current.secondsFromGMT()
         let tzOffset = Int64((Double(secs) / 3600).rounded())
         let json = summaryJson(dbPath: path, tzOffset: tzOffset)
+        let both = SummaryJson(ring: json, watch: watchSummaryJson(dbPath: path, tzOffset: tzOffset))
         guard let data = json.data(using: .utf8),
-              let s = try? JSONDecoder().decode(Summary.self, from: data)
-        else { return (Summary(error: "decode failed"), json) }
-        return (s, json)
+              var s = try? JSONDecoder().decode(Summary.self, from: data)
+        else { return (Summary(error: "decode failed"), both) }
+        s.watch = try? JSONDecoder().decode(WatchSummary.self, from: Data(both.watch.utf8))
+        return (s, both)
     }
 }

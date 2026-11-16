@@ -36,6 +36,34 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(s.restMode?.value?.on, true)
     }
 
+    func testTheRingScoreWinsAndTheWatchScoreFillsAMorningWithoutOne() throws {
+        let score = { (v: Int) in "{\"score\":\(v),\"contributors\":[]}" }
+        var s = try summary("""
+        {"scores":{"days":{"2026-09-26":{"sleep":\(score(80)),"readiness":\(score(75))}}},
+         "workouts":[{"id":"manual-a","day":"2026-09-26","start":"2026-09-26 07:15","end":"2026-09-26 07:45",
+           "start_unix":1,"end_unix":1801,"duration_min":30,"label":"Yoga","source":"manual","source_name":"Added by you"}]}
+        """)
+        s.watch = try JSONDecoder().decode(WatchSummary.self, from: Data("""
+        {"kind":"watch","scores":{"latest":"2026-09-27","days":{
+           "2026-09-26":{"sleep":\(score(60)),"readiness":\(score(61))},
+           "2026-09-27":{"sleep":\(score(70)),"readiness":\(score(71))}}},
+         "fitness":{"vo2max":44.6,"date":"2026-09-25","source_name":"Apple Watch"},
+         "workouts":[{"id":"health-b","day":"2026-09-27","start":"2026-09-27 18:10","end":"2026-09-27 18:48",
+           "start_unix":5000,"end_unix":7280,"duration_min":38,"label":"Running","source":"health","source_name":"Apple Watch"}]}
+        """.utf8))
+
+        XCTAssertEqual(s.days, ["2026-09-27", "2026-09-26"], "the day picker reaches a watch-only morning")
+        let ring = try XCTUnwrap(s.shownScore(.sleep, day: "2026-09-26"))
+        XCTAssertEqual(ring.score.score, 80)
+        XCTAssertFalse(ring.fromWatch)
+        let watch = try XCTUnwrap(s.latestScore(.readiness, upTo: "2026-09-27"))
+        XCTAssertEqual(watch.score.score, 71)
+        XCTAssertTrue(watch.fromWatch)
+        XCTAssertNil(s.shownScore(.activity, day: "2026-09-27"))
+        XCTAssertEqual(s.watch?.fitness?.vo2max, 44.6)
+        XCTAssertEqual(s.mergedWorkouts.map(\.source), ["health", "manual"])
+    }
+
     func testLowBatteryNotifiesOncePerDischarge() throws {
         let s = try summary("""
         {"device":{"battery_pct":18,"battery":{"latest":{"t":1789999000,"pct":18},"history":[],

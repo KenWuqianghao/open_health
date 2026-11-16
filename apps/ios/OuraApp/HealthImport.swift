@@ -2,10 +2,11 @@ import Foundation
 import HealthKit
 import CryptoKit
 
-// Apple Health → the summary. Workouts and the measured VO2 max that an Apple Watch
-// or another app wrote go into `external.json` next to the database; the shared
-// brain (oura-summary) joins them with the ring's data. Samples that this app wrote
-// itself are left out, so the Health export and this import cannot feed each other.
+// Apple Health → the watch summary. Apple Watch sleep, workouts and the measured VO2
+// max that an Apple Watch or another app wrote go into `external.json` next to the
+// database; the shared brain (oura-summary) builds the watch summary from it, apart
+// from the ring summary. Samples that this app wrote itself are left out, so the
+// Health export and this import cannot feed each other.
 
 struct HealthImportStatus: Equatable {
     var lastRunAt: Date?

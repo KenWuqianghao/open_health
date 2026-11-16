@@ -260,7 +260,8 @@ struct AllDaysView: View {
             NavigationLink(value: Route.report(ReportSel(day: day, sleep: true))) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Fmt.dayLabel(day)).font(.body.weight(.medium))
-                    if let sc = s.scores?.days[day] {
+                    let present = ScoreKind.allCases.compactMap { k in s.shownScore(k, day: day).map { (k, $0.score.score) } }
+                    if !present.isEmpty {
                         // one pill per score on its own line; a column at large text
                         let pill = { (kind: ScoreKind, v: Double) in
                             HStack(spacing: 4) {
@@ -272,7 +273,6 @@ struct AllDaysView: View {
                             .background(kind.tint.opacity(0.12), in: Capsule())
                             .accessibilityLabel("\(kind.title) \(Int(v.rounded()))")
                         }
-                        let present = ScoreKind.allCases.compactMap { k in sc.score(k).map { (k, $0.score) } }
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 6) { ForEach(present, id: \.0) { pill($0.0, $0.1).fixedSize() } }
                             VStack(alignment: .leading, spacing: 4) { ForEach(present, id: \.0) { pill($0.0, $0.1) } }
@@ -701,7 +701,8 @@ struct RootView: View {
                     case .report(let sel): DayReportView(s: s, day: sel.day, tab: sel.sleep ? .sleep : .activity)
                     case .vital(let kind): VitalTrendView(s: s, kind: kind).zoomDestination(route, in: zoom)
                     case .score(let kind, let day):
-                        ScoreDetailView(kind: kind, day: day, score: s.scores?.days[day]?.score(kind),
+                        let shown = s.shownScore(kind, day: day)
+                        ScoreDetailView(kind: kind, day: day, score: shown?.score, fromWatch: shown?.fromWatch == true,
                                         history: s.scoreSeries(kind))
                             .zoomDestination(route, in: zoom)
                     case .trends: TrendsView(s: s).zoomDestination(route, in: zoom)
@@ -861,10 +862,10 @@ struct RootView: View {
             }
             if let plugin {
                 let full = plugin.enrich(base, previous: previous, progress: progress)
-                HubPusher.shared.schedule(rawJson: built.json, models: full, reason: "foreground")
+                HubPusher.shared.schedule(json: built.json, models: full, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: full) }
             } else {
-                HubPusher.shared.schedule(rawJson: built.json, models: previous ?? base, reason: "foreground")
+                HubPusher.shared.schedule(json: built.json, models: previous ?? base, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: nil) }
             }
         }
@@ -986,7 +987,7 @@ struct RootView: View {
 
                     // Cardiovascular estimates belong together: vascular age/PWV
                     // from raw PPG plus VO₂ max (measured, or from the profile).
-                    if s.cardio?.vascular_age != nil || s.fitness?.vo2max != nil {
+                    if s.cardio?.vascular_age != nil || s.fitness?.vo2max != nil || s.watch?.fitness?.vo2max != nil {
                         SectionTitle("Cardiovascular")
                         VStack(alignment: .leading, spacing: 10) {
                             CardHeader(title: "Heart Health", icon: "heart.text.square.fill", tint: Theme.cardio)
@@ -1001,12 +1002,17 @@ struct RootView: View {
                                 Divider()
                                 if let pwv = cv.pwv_ms { StatRow(label: "Pulse speed in arteries", value: String(format: "%.1f m/s", pwv)) }
                             }
-                            if let vo = s.fitness?.vo2max {
+                            if let measured = s.watch?.fitness, let vo = measured.vo2max {
                                 if s.cardio?.vascular_age != nil { Divider() }
-                                StatRow(label: "Cardio fitness (VO₂ max)", value: String(format: "%.0f", vo))
-                                Text(s.fitness?.source == "measured"
-                                     ? "Measured by \(s.fitness?.source_name ?? "Apple Health")\(s.fitness?.date.map { ", \(Fmt.monthDay($0))" } ?? "")"
-                                     : "An estimate from your age, sex and weight")
+                                StatRow(label: "VO₂ max, \(measured.source_name ?? "Apple Watch")", value: String(format: "%.0f", vo))
+                                if let date = measured.date {
+                                    Text("Measured \(Fmt.monthDay(date))").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            if let vo = s.fitness?.vo2max {
+                                if s.cardio?.vascular_age != nil || s.watch?.fitness?.vo2max != nil { Divider() }
+                                StatRow(label: "VO₂ max, estimate", value: String(format: "%.0f", vo))
+                                Text("From your age, sex and weight")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }

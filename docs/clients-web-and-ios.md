@@ -37,7 +37,7 @@ metric there once and both clients receive it in the JSON.
 | Feature | Web (`app.js`) | iOS (`OuraApp.swift`) | Data (JSON key) | Model |
 | --- | --- | --- | --- | --- |
 | **Sleep / Readiness / Activity scores** | `renderScores` | `ScoresCard` → `ScoreDetailView` | `scores.days[ymd].{sleep,readiness,activity}` | none (`oura-analysis::scores`; see open_oura `docs/algorithms/live-scores.md`) |
-| **Apple Watch sleep score** (a morning without a ring night) | `renderScores` ⌚ mark, `openScore` text | `ScoresCard` Watch icon, `ScoreDetailView` text | `scores.days[ymd].{sleep,readiness}.source = "apple_watch"`, from `external.json` `sleep` (iOS `HealthImport`) | none |
+| **Apple Watch sleep score** (a morning without a ring night) | `renderScores` ⌚ mark, `openScore` text | `ScoresCard` Watch icon, `ScoreDetailView` text | `scores.days[ymd].{sleep,readiness}.source = "apple_watch"`, from `external.json` `sleep` (iOS `HealthImport`). No efficiency or latency part: the Watch writes stages only from sleep onset to the final wake, with no time in bed | none |
 | **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`stage_source: ring`) | none (`sleep_phase_data` 0x5a pages) |
 | Digest headline | `load()` digest | `RootView` digest | `digest` | — |
 | Vitals (HRV/RHR/temp/SpO₂) | `renderTiles` / `VitalCell`-like | `VitalCell` | `vitals`, `nights[]` | — |
@@ -246,10 +246,38 @@ continues. `oura-summary::normalize_bed_periods` repairs the model boundary in t
 
 Pulse evidence is deliberately gated: each burst needs multiple firmware-accepted heart
 rate estimates, consecutive bursts can be at most 15 minutes apart, and naps or clean
-bedtime ends never use daytime pulse sampling. The resulting canonical `start_ds/end_ds`
-is the `sleep_ranges` input of the `ModelRunner`, so both clients and an add-on use the
-same recovered window. Regression tests include isolated daytime HR, long gaps,
-periodic post-nap sampling, and the extracted Ring 5 brief-wake vector.
+bedtime ends never use daytime pulse sampling.
+
+A window is not extended when the ring's own analysis of it ends awake: the sleep was
+over when the ring closed the bedtime. On a Gen3 ring the sleep-only streams continue
+for hours after waking. With the Apple Watch as reference, on 6 nights whose analysis
+ended awake the watch showed no sleep in the extension, and on 2 nights whose analysis
+ended asleep it showed 91 % and 97 % sleep. Windows that overlap on the same ring clock
+are merged at any overlap, so one sleep never counts twice. When a raw window covers at
+least half of the window before it and ends after it, the ring analysed that window again
+from a later start, and a sleep that is only that window starts there. On 19 such
+overlaps the coverage was 64 % to 100 %, and on the 2 with an Apple Watch the later start
+was the Watch's sleep onset to within 3 minutes. A smaller overlap joins two sleeps: at
+13 % coverage the Watch recorded sleep before the later start. A sleep that a merge
+across a break already joined keeps its start, so a merge never drops a part of it.
+
+Each ring analysis starts at the `bedtime_period` that the ring writes just before page 0
+of its `sleep_phase_data` pages. On a Gen3 ring, checked against SleepNet, this anchor is
+wrong by 0 to 2 minutes, and an anchor at the time the pages were written is wrong by −20
+to +55 minutes. A night's hypnogram fills the time that no analysis covers with wake, so
+onset, efficiency and stage percentages stay measured against time in bed.
+
+The `sleep_phase_data` pages are padded with zero bytes, and a zero epoch decodes as
+deep. `nights::ring_runs` cuts the trailing deep epochs that the run's
+`sleep_summary_2` does not count, because on short runs the ring stops analysing before
+the bedtime end. The cut needs the summary's REM and light counts to equal the pages'
+counts, as on 279 of 279 Gen3 runs, so a ring whose summary has another layout keeps
+its codes.
+
+The resulting canonical `start_ds/end_ds` is the `sleep_ranges` input of the
+`ModelRunner`, so both clients and an add-on use the same recovered window. Regression
+tests include isolated daytime HR, long gaps, periodic post-nap sampling, and the
+extracted Ring 5 brief-wake vector.
 
 The polysomnograph's skin-temperature lane uses only `sleep_temp_event`. Generic
 `temp_event` contains multiple device/ambient channels and must never be flattened into

@@ -125,6 +125,9 @@ actor HealthExportEngine {
 
         // Epoch migration: purge everything the old exporter wrote, start clean.
         if state.epoch != epoch {
+            // Without a summary the plans have no stages or workouts, and finalized
+            // days would never be written again: purge on a pass that has one.
+            if summary == nil && !state.epoch.isEmpty { return outcome }
             progress("removing samples from an older exporter…")
             do {
                 let removed = try await purgeAll()
@@ -377,7 +380,7 @@ actor HealthExportEngine {
 final class HealthExporter: ObservableObject {
     static let shared = HealthExporter()
     /// Bump to purge and re-export everything (a rule change, a new exporter).
-    static let epoch = "2026-09-hk2"
+    static let epoch = "2026-11-hk3"
     private static let enabledKey = "health.export.enabled"
     private static let basalKey = "health.export.basal"
 

@@ -519,6 +519,8 @@ pub(crate) struct WorkoutResult {
     pub credited_min: BTreeMap<i64, f64>,
 }
 
+/// A ring session that overlaps a journal entry by half or more is dropped: the entry
+/// names the same activity.
 pub(crate) fn merge_workouts(
     ring: Vec<Workout>,
     journal: &Journal,

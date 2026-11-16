@@ -875,6 +875,7 @@ fn activity_day_stats(
     days
 }
 
+/// Up to 14 nights before night `i`, never the night itself.
 fn trailing_baseline(per_night: &[Option<f64>], i: usize) -> Option<Stats> {
     let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
     Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())

@@ -179,6 +179,7 @@ final class HealthImport: ObservableObject {
     }
 
     private func notOurs() -> NSPredicate {
+        // Samples this app wrote are left out, so the Health export and this import cannot feed each other.
         let ours = HKSource.default()
         return NSCompoundPredicate(notPredicateWithSubpredicate: HKQuery.predicateForObjects(from: ours))
     }

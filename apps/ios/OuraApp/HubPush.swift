@@ -162,6 +162,8 @@ struct SummaryJson {
     }
 }
 
+/// The Swift `Summary` struct drops fields the agent tools need (`generated_at`, `tz`,
+/// night `metrics`), so the raw JSON is the base and is never re-encoded from the struct.
 enum HubPayload {
     static func build(rawJson: String, models: Summary?) throws -> Data {
         guard let data = rawJson.data(using: .utf8),

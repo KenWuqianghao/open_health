@@ -516,7 +516,7 @@ extension Summary {
     func highlight(for day: String) -> String? {
         var sentences: [String] = []
         var first: String?
-        if let r = latestRingScore(.readiness, upTo: day)?.score.score {
+        if let r = scores?.days[day]?.readiness?.score {
             switch r {
             case 85...: first = "You're well recovered"
             case 70..<85: first = "You're reasonably recovered"

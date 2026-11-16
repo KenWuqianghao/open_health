@@ -377,7 +377,7 @@ actor HealthExportEngine {
 final class HealthExporter: ObservableObject {
     static let shared = HealthExporter()
     /// Bump to purge and re-export everything (a rule change, a new exporter).
-    static let epoch = "2026-09-hk2"
+    static let epoch = "2026-11-hk3"
     private static let enabledKey = "health.export.enabled"
     private static let basalKey = "health.export.basal"
 

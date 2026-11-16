@@ -37,10 +37,10 @@ use oura_store::storage::Store;
 
 use crate::nights::{collect_bed_periods, find_night, EventRow};
 use crate::ring_time::RingClock;
-use crate::{civil, read_profile, BedPeriod, Demographics};
+use crate::{civil, read_profile, Demographics};
 
 /// Bump when the JSON contract or a bucketing rule changes; exporters re-export.
-pub const HEALTH_SAMPLES_VERSION: u32 = 1;
+pub const HEALTH_SAMPLES_VERSION: u32 = 2;
 /// A day is final once the ring's own clock has moved this far past its end:
 /// the drain is cursor-ordered, so no event for that day can still arrive.
 pub const FINALIZE_GRACE_S: i64 = 6 * 3600;
@@ -173,7 +173,7 @@ pub fn health_samples_from_store(
         .unwrap_or(RingGeneration::Unknown);
     let cal = spo2_calibration(generation);
 
-    let beds: Vec<BedPeriod> = collect_bed_periods(&events, unix_s_at);
+    let (beds, _) = collect_bed_periods(&events, unix_s_at);
     let mut night_accs: Vec<NightAcc> = beds.iter().map(|_| NightAcc::default()).collect();
 
     let sex_code = match demo.sex {

@@ -151,10 +151,9 @@ enum SummaryKind: String, CaseIterable {
 
 struct SummaryJson {
     var ring: String
-    /// nil when the phone has no Apple Watch data.
-    var watch: String?
+    var watch: String
 
-    func json(_ kind: SummaryKind) -> String? {
+    func json(_ kind: SummaryKind) -> String {
         switch kind {
         case .ring: return ring
         case .watch: return watch
@@ -387,13 +386,9 @@ final class HubPusher: ObservableObject {
         }
     }
 
-    private func pushSummary(_ kind: SummaryKind, rawJson: String?, models: Summary?, reason: String,
+    private func pushSummary(_ kind: SummaryKind, rawJson: String, models: Summary?, reason: String,
                              end: Date) async -> SummaryOutcome {
         let what = "\(kind.rawValue) summary"
-        guard let rawJson else {
-            dlog("hub", "\(what) not sent: no Apple Watch data (\(reason))")
-            return .skipped
-        }
         let t: (summary: URL, events: URL, health: URL, token: String)
         do { t = try targets() } catch { await fail(error, what); return .notSent }
         let body: Data

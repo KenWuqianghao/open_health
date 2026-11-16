@@ -184,14 +184,15 @@ fn health_workouts(workouts: &[ExternalWorkout]) -> Vec<Workout> {
     out
 }
 
-/// The watch summary JSON, or `None` when there is no Apple Watch night, workout or
-/// VO2 max. `tz` is hours from UTC. The only other input is the age in
+/// The watch summary JSON. Without Apple Watch data, it has no nights, scores, workouts
+/// or VO2 max, so a reader that keeps the last summary shows that the data stopped.
+/// `tz` is hours from UTC. The only other input is the age in
 /// `profile.json`, which the sleep score needs.
-pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Option<Value>> {
+pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Value> {
     build(db, tz, now_unix_s())
 }
 
-fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
+fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Value> {
     let external = read_external(db)?;
     let watch_nights = nights(&external.sleep);
     let workouts = health_workouts(&external.workouts);
@@ -202,9 +203,6 @@ fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
             "source_name": m.source,
         })
     });
-    if watch_nights.is_empty() && workouts.is_empty() && fitness.is_none() {
-        return Ok(None);
-    }
     let scored = score_nights(&watch_nights, tz, read_profile(db).age);
 
     let mut asleep_by_day: BTreeMap<i64, i32> = BTreeMap::new();
@@ -238,7 +236,7 @@ fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
         })
         .collect();
 
-    Ok(Some(json!({
+    Ok(json!({
         "kind": "watch",
         "generated_at": now_unix_s as i64,
         "tz": tz,
@@ -250,7 +248,7 @@ fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
         "sleep_debt": sleep_debt_summary(&asleep_by_day),
         "fitness": fitness,
         "workouts": extras::workouts_json(&workouts, tz),
-    })))
+    }))
 }
 
 #[cfg(test)]

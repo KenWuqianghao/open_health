@@ -22,8 +22,8 @@ pub fn rmssd(ibi_ms: Vec<u16>) -> f64 {
     oura_analysis::ported::hrv::rmssd(&ibi_ms).unwrap_or(-1.0)
 }
 
-/// The full dashboard summary — the SAME `build_summary()` JSON the web client
-/// renders, computed from the synced SQLite DB. `tz_offset` is hours from UTC.
+/// The ring summary — the SAME `build_summary()` JSON the web client renders,
+/// computed from the synced SQLite DB and the journal. `tz_offset` is hours from UTC.
 ///
 /// The summary uses [`oura_summary::NoModelRunner`]: the signal-derived panels
 /// (vitals, cardio trend, activity profile, device & data-health, digest) and the
@@ -38,6 +38,19 @@ pub fn summary_json(db_path: String, tz_offset: i64) -> String {
         tz_offset,
         &oura_summary::NoModelRunner,
     ) {
+        Ok(v) => v.to_string(),
+        Err(e) => json!({ "error": e.to_string() }).to_string(),
+    }
+}
+
+/// The watch summary: Apple Watch nights, sleep and readiness scores, sleep debt,
+/// VO2 max and workouts, from the Apple Health data that `external_write` stores.
+/// It uses no ring data. `tz_offset` is hours from UTC.
+///
+/// Returns the summary JSON string, or `{ "error": "…" }`.
+#[uniffi::export]
+pub fn watch_summary_json(db_path: String, tz_offset: i64) -> String {
+    match oura_summary::build_watch_summary(std::path::Path::new(&db_path), tz_offset) {
         Ok(v) => v.to_string(),
         Err(e) => json!({ "error": e.to_string() }).to_string(),
     }
@@ -167,8 +180,8 @@ pub fn journal_apply(db_path: String, op_json: String) -> Result<String, DataErr
     serde_json::to_string(&journal).map_err(data_err)
 }
 
-/// Replace the data from other sources (Apple Health workouts, measured VO2 max)
-/// that the summary reads. `json` has the shape of `oura_summary::external::External`.
+/// Replace the Apple Health data (sleep stages, heart rate, HRV, workouts, measured
+/// VO2 max) that the watch summary reads. `json` has the shape of `oura_summary::external::External`.
 #[uniffi::export]
 pub fn external_write(db_path: String, json: String) -> Result<(), DataError> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(data_err)?;

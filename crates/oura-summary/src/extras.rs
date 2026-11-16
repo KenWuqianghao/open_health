@@ -16,7 +16,6 @@ use oura_analysis::scores::Stats;
 use serde_json::{json, Map, Value};
 
 use crate::civil;
-use crate::external::External;
 use crate::journal::{parse_day, Journal};
 use crate::nights::EventRow;
 
@@ -506,41 +505,24 @@ pub(crate) struct WorkoutResult {
     pub credited_min: BTreeMap<i64, f64>,
 }
 
-/// One list of workouts from the ring, Apple Health and the journal.
+/// One list of workouts from the ring and the journal.
 ///
-/// A ring session that overlaps an entry from Apple Health or the journal by half
-/// or more is dropped: the entry names the same activity. When an entry reports
-/// more active energy than the ring measured in its time, the day gets the
-/// difference (the ring was off the finger, or on a bicycle handlebar).
+/// A ring session that overlaps a journal entry by half or more is dropped: the
+/// entry names the same activity. When an entry reports more active energy than
+/// the ring measured in its time, the day gets the difference (the ring was off
+/// the finger, or on a bicycle handlebar).
 pub(crate) fn merge_workouts(
     ring: Vec<Workout>,
-    external: &External,
     journal: &Journal,
     met_min: &BTreeMap<i64, f64>,
     beats: &[Beat],
     weight_kg: f64,
     tz: i64,
 ) -> WorkoutResult {
-    let mut entries: Vec<Workout> = external
+    let mut entries: Vec<Workout> = journal
         .workouts
         .iter()
-        .filter(|w| w.end_unix > w.start_unix)
         .map(|w| Workout {
-            id: format!("health-{}", w.id),
-            start_unix: w.start_unix as f64,
-            end_unix: w.end_unix as f64,
-            label: w.label.clone(),
-            source: "health",
-            source_name: if w.source.is_empty() { "Apple Health".into() } else { w.source.clone() },
-            active_kcal: w.active_kcal,
-            distance_m: w.distance_m,
-            avg_hr: w.avg_hr,
-            max_hr: w.max_hr,
-            note: String::new(),
-        })
-        .collect();
-    for w in &journal.workouts {
-        let manual = Workout {
             id: format!("manual-{}", w.id),
             start_unix: w.start_unix as f64,
             end_unix: w.start_unix as f64 + w.duration_min * 60.0,
@@ -552,12 +534,8 @@ pub(crate) fn merge_workouts(
             avg_hr: None,
             max_hr: None,
             note: w.note.clone(),
-        };
-        // an Apple Health entry of the same activity wins over the manual one
-        if !entries.iter().any(|e| e.overlap(&manual) >= 0.5 * manual.minutes()) {
-            entries.push(manual);
-        }
-    }
+        })
+        .collect();
 
     let mut credited_kcal: BTreeMap<i64, f64> = BTreeMap::new();
     let mut credited_min: BTreeMap<i64, f64> = BTreeMap::new();
@@ -1114,18 +1092,16 @@ mod tests {
             max_hr: None,
             note: String::new(),
         }];
-        let external: External = serde_json::from_value(json!({ "workouts": [
-            { "id": "a", "start_unix": 36_000, "end_unix": 37_800, "label": "Run",
-              "active_kcal": 300.0, "avg_hr": 150.0, "source": "Apple Watch" },
-            { "id": "b", "start_unix": 50_000, "end_unix": 53_600, "label": "Swim",
-              "active_kcal": 400.0 },
+        let journal: Journal = serde_json::from_value(json!({ "workouts": [
+            { "id": "a", "start_unix": 36_000, "duration_min": 30.0, "label": "Run", "active_kcal": 300.0 },
+            { "id": "b", "start_unix": 50_000, "duration_min": 60.0, "label": "Swim", "active_kcal": 400.0 },
         ]}))
         .unwrap();
         // the ring measured 5 MET above rest during the run, nothing during the swim
         let met: BTreeMap<i64, f64> = (600..630).map(|m| (m, 5.0)).collect();
-        let r = merge_workouts(ring, &external, &Journal::default(), &met, &[], 70.0, 0);
+        let r = merge_workouts(ring, &journal, &met, &[], 70.0, 0);
         assert_eq!(r.workouts.len(), 2);
-        assert!(r.workouts.iter().all(|w| w.source == "health"));
+        assert!(r.workouts.iter().all(|w| w.source == "manual"));
         // run: ring 5 × 70 / 60 × 30 = 175 kcal, entry 300 → 125; swim: 400
         assert_eq!(r.credited_kcal[&0].round(), 525.0);
         assert_eq!(r.credited_min[&0], 60.0);

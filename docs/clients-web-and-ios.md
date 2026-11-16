@@ -18,6 +18,14 @@ calls it in `dashboard.rs`; iOS calls it through `oura-core`'s `summary_json()` 
 public app runs without models (`NoModelRunner`). An add-on can supply model results
 through `OURA_MODEL_RUNNER` (CLI) or a `SummaryPlugin` (iOS).
 
+There are two summaries. Each has a top-level `kind`:
+
+- **Ring summary** (`build_summary`, `"kind": "ring"`): ring data and the journal only.
+- **Watch summary** (`build_watch_summary`, `"kind": "watch"`): only the Apple Health data in
+  `external.json` (Apple Watch sleep stages, heart rate, HRV SDNN, workouts, VO₂ max). It
+  scores every watch night. iOS gets it through `watch_summary_json()`; `oura watch-summary`
+  prints it. No value in one summary comes from the other source.
+
 The non-model math is the **ported ecore ground truth** from `crates/oura-analysis`
 (`ported::{spo2, temperature, metabolic, baseline}`): SpO₂ calibration, nightly skin
 temperature, Schofield BMR (→ `total_kcal`), Jackson VO₂max, steps→distance, and the
@@ -37,7 +45,7 @@ metric there once and both clients receive it in the JSON.
 | Feature | Web (`app.js`) | iOS (`OuraApp.swift`) | Data (JSON key) | Model |
 | --- | --- | --- | --- | --- |
 | **Sleep / Readiness / Activity scores** | `renderScores` | `ScoresCard` → `ScoreDetailView` | `scores.days[ymd].{sleep,readiness,activity}` | none (`oura-analysis::scores`; see open_oura `docs/algorithms/live-scores.md`) |
-| **Apple Watch sleep score** (a morning without a ring night) | `renderScores` ⌚ mark, `openScore` text | `ScoresCard` Watch icon, `ScoreDetailView` text | `scores.days[ymd].{sleep,readiness}.source = "apple_watch"`, from `external.json` `sleep` (iOS `HealthImport`). No efficiency or latency part: the Watch writes stages only from sleep onset to the final wake, with no time in bed | none |
+| **Apple Watch sleep score** (a morning without a ring score) | — (the web dashboard shows the ring summary only) | `ScoresCard` Watch icon, `ScoreDetailView` text | watch summary `scores.days[ymd].{sleep,readiness}` (`watch_summary_json`), from `external.json` `sleep` (iOS `HealthImport`). No efficiency or latency part: the Watch writes stages only from sleep onset to the final wake, with no time in bed | none |
 | **Ring hypnogram (model-free stages)** | hypnogram | hypnogram | `nights[].stages` (`stage_source: ring`) | none (`sleep_phase_data` 0x5a pages) |
 | Digest headline | `load()` digest | `RootView` digest | `digest` | — |
 | Vitals (HRV/RHR/temp/SpO₂) | `renderTiles` / `VitalCell`-like | `VitalCell` | `vitals`, `nights[]` | — |

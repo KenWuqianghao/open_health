@@ -203,7 +203,7 @@ enum Command {
     },
     /// Read the real on-ring MODE/status of the data features (what's actually on).
     FeatureStatus,
-    /// Build the ring summary, and the watch summary from `external.json` next to the
+    /// Build the ring summary, and the watch summary when `external.json` is next to the
     /// database, and push them to an always-on hub (`oura-hub`), so an agent can
     /// read them over MCP while this machine is off.
     Push {

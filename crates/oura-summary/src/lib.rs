@@ -2113,6 +2113,8 @@ mod tests {
         assert_eq!(empty["nights"], json!([]), "no Apple Watch data gives an empty watch summary");
         assert_eq!(empty["scores"]["latest"], Value::Null);
         assert_eq!(empty["fitness"], Value::Null);
+        assert_eq!(empty["sleep_debt"]["days"], json!([]));
+        assert_eq!(empty["workouts"], json!([]));
         std::fs::write(external::external_path(&db), "{not json").unwrap();
         assert!(build_watch_summary(&db, 2).is_err(), "a broken external.json is an error, not an empty summary");
         std::fs::remove_dir_all(db.parent().unwrap()).ok();

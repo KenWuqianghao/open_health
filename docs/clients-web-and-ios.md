@@ -25,6 +25,7 @@ There are two summaries. Each has a top-level `kind`:
   `external.json` (Apple Watch sleep stages, heart rate, HRV SDNN, workouts, VO₂ max). It
   scores every watch night. Without Apple Watch data it has no nights, scores, workouts or
   VO₂ max, and the phone still pushes it, so the hub stops showing old watch values.
+  `oura push` sends the watch summary only when `external.json` exists.
   iOS gets it through `watch_summary_json()`; `oura watch-summary` prints it. No value in
   one summary comes from the other source.
 

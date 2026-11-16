@@ -77,7 +77,7 @@ enum AppHooks {
             Notifier.shared.evaluate(full)
             await HealthExporter.shared.run(.modelsUpdated, summary: full)
             if let summaryJson {
-                await HubPusher.shared.pushSummary(.ring, rawJson: summaryJson.ring, models: full, reason: "models", timeout: 20)
+                await HubPusher.shared.pushSummaries(summaryJson, models: full, reason: "models", deadline: 20)
             }
         }
     }

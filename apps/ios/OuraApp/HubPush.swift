@@ -226,6 +226,17 @@ enum HubPayload {
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Why the watch summary is not sent, or nil to send it: the core reported an
+    /// error, or there is no night, no workout and no VO2 max (a phone without
+    /// Apple Watch data). The CLI skips the watch push for the same reason.
+    static func watchSkipReason(_ rawJson: String) -> String? {
+        guard let root = (try? JSONSerialization.jsonObject(with: Data(rawJson.utf8))) as? [String: Any] else { return nil }
+        if let e = root["error"] as? String { return "error: \(e)" }
+        let none = { (key: String) in (root[key] as? [Any])?.isEmpty ?? true }
+        let noFitness = root["fitness"] == nil || root["fitness"] is NSNull
+        return none("nights") && none("workouts") && noFitness ? "no Apple Watch data" : nil
+    }
 }
 
 /// The head of one `export_batch_json` page: enough to drive the loop.
@@ -285,10 +296,15 @@ final class HubPusher: ObservableObject {
     /// Rows per page. About 1 MB of hex per page at most.
     static let page: UInt32 = 1000
 
+    /// `skipped`: unchanged or nothing to send. `notSent`: failed or out of time.
+    private enum SummaryOutcome { case sent, skipped, notSent }
+
     @Published var enabled: Bool { didSet { HubSettings.enabled = enabled } }
     @Published var url: String { didSet { HubSettings.url = url } }
     @Published private(set) var hasToken: Bool
     @Published private(set) var status = HubPushStatus()
+    /// The last reason the watch summary was skipped, so each reason is logged once.
+    @MainActor private var loggedWatchSkip: String?
 
     private init() {
         enabled = HubSettings.enabled
@@ -330,7 +346,7 @@ final class HubPusher: ObservableObject {
         guard isConfigured else { return }
         let start = Date()
         if let json {
-            await pushSummaries(json, models: models, reason: reason, timeout: min(deadline, 20))
+            await pushSummaries(json, models: models, reason: reason, deadline: deadline)
         }
         var left = deadline - Date().timeIntervalSince(start)
         if left > 2 { await pushEvents(reason: reason, deadline: left) }
@@ -372,40 +388,60 @@ final class HubPusher: ObservableObject {
     }
 
     /// The ring summary with the model results folded in, then the watch summary.
+    /// Both share `deadline`; each send gets what is left of it, at most 20 s. The
+    /// error is cleared once per pass, so a sent watch summary does not hide a failed
+    /// ring one. The summary time moves only when no kind failed or ran out of time.
     @discardableResult
-    func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, timeout: TimeInterval) async -> Bool {
-        var sent = true
+    func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async -> Bool {
+        let start = Date()
+        await update { $0.running = true; $0.lastError = nil }
+        var outcomes: [SummaryOutcome] = []
         for kind in SummaryKind.allCases {
-            let ok = await pushSummary(kind, rawJson: json.json(kind), models: kind == .ring ? models : nil,
-                                       reason: reason, timeout: timeout)
-            sent = sent && ok
+            let left = deadline - Date().timeIntervalSince(start)
+            guard left > 2 else {
+                dlog("hub", "\(kind.rawValue) summary not sent: deadline (\(reason))")
+                outcomes.append(.notSent)
+                continue
+            }
+            outcomes.append(await pushSummary(kind, rawJson: json.json(kind), models: kind == .ring ? models : nil,
+                                              reason: reason, timeout: min(20, left)))
         }
-        return sent
+        let ok = !outcomes.contains(.notSent)
+        await update {
+            $0.running = false
+            if ok && outcomes.contains(.sent) { $0.lastSummaryAt = Date() }
+        }
+        return ok
     }
 
-    @discardableResult
-    func pushSummary(_ kind: SummaryKind, rawJson: String, models: Summary?, reason: String,
-                     timeout: TimeInterval) async -> Bool {
+    private func pushSummary(_ kind: SummaryKind, rawJson: String, models: Summary?, reason: String,
+                             timeout: TimeInterval) async -> SummaryOutcome {
         let what = "\(kind.rawValue) summary"
+        if kind == .watch, let why = HubPayload.watchSkipReason(rawJson) {
+            let first = await MainActor.run { () -> Bool in
+                defer { self.loggedWatchSkip = why }
+                return self.loggedWatchSkip != why
+            }
+            if first { dlog("hub", "\(what) not sent: \(why)") }
+            return .skipped
+        }
         let t: (summary: URL, events: URL, health: URL, token: String)
-        do { t = try targets() } catch { await fail(error, what); return false }
+        do { t = try targets() } catch { await fail(error, what); return .notSent }
         let body: Data
-        do { body = try HubPayload.build(rawJson: rawJson, models: models) } catch { await fail(error, what); return false }
+        do { body = try HubPayload.build(rawJson: rawJson, models: models) } catch { await fail(error, what); return .notSent }
         let sha = HubPayload.sha256(body)
         if sha == HubSettings.lastSummarySha(kind), reason != "manual" {
             dlog("hub", "\(what) unchanged, not sent (\(reason))")
-            return true
+            return .skipped
         }
-        await update { $0.running = true; $0.lastError = nil }
         do {
             let reply = try await HubPushEngine.send(body: body, url: t.summary, token: t.token, timeout: timeout)
             HubSettings.setLastSummarySha(sha, kind)
             dlog("hub", "\(what) sent: \(body.count) B, stored=\(reply["stored"] ?? "?") (\(reason))")
-            await update { $0.running = false; $0.lastSummaryAt = Date() }
-            return true
+            return .sent
         } catch {
             await fail(error, what)
-            return false
+            return .notSent
         }
     }
 

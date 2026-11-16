@@ -151,9 +151,10 @@ enum SummaryKind: String, CaseIterable {
 
 struct SummaryJson {
     var ring: String
-    var watch: String
+    /// nil when the phone has no Apple Watch data.
+    var watch: String?
 
-    func json(_ kind: SummaryKind) -> String {
+    func json(_ kind: SummaryKind) -> String? {
         switch kind {
         case .ring: return ring
         case .watch: return watch
@@ -217,14 +218,6 @@ enum HubPayload {
 
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    static func watchSkipReason(_ rawJson: String) -> String? {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(rawJson.utf8))) as? [String: Any] else { return nil }
-        if let e = root["error"] as? String { return "error: \(e)" }
-        let none = { (key: String) in (root[key] as? [Any])?.isEmpty ?? true }
-        let noFitness = root["fitness"] == nil || root["fitness"] is NSNull
-        return none("nights") && none("workouts") && noFitness ? "no Apple Watch data" : nil
     }
 }
 
@@ -291,7 +284,6 @@ final class HubPusher: ObservableObject {
     @Published var url: String { didSet { HubSettings.url = url } }
     @Published private(set) var hasToken: Bool
     @Published private(set) var status = HubPushStatus()
-    @MainActor private var loggedWatchSkip: String?
 
     private init() {
         enabled = HubSettings.enabled
@@ -330,8 +322,9 @@ final class HubPusher: ObservableObject {
     func pushAll(json: SummaryJson?, models: Summary?, reason: String, deadline: TimeInterval) async {
         guard isConfigured else { return }
         let start = Date()
+        await update { $0.lastError = nil }
         if let json {
-            await pushSummaries(json, models: models, reason: reason, deadline: deadline)
+            await sendSummaries(json, models: models, reason: reason, deadline: deadline)
         }
         var left = deadline - Date().timeIntervalSince(start)
         if left > 2 { await pushEvents(reason: reason, deadline: left) }
@@ -372,38 +365,32 @@ final class HubPusher: ObservableObject {
         pushNow()
     }
 
-    @discardableResult
-    func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async -> Bool {
-        let start = Date()
-        await update { $0.running = true; $0.lastError = nil }
-        var outcomes: [SummaryOutcome] = []
-        for kind in SummaryKind.allCases {
-            let left = deadline - Date().timeIntervalSince(start)
-            guard left > 2 else {
-                dlog("hub", "\(kind.rawValue) summary not sent: deadline (\(reason))")
-                outcomes.append(.notSent)
-                continue
-            }
-            outcomes.append(await pushSummary(kind, rawJson: json.json(kind), models: kind == .ring ? models : nil,
-                                              reason: reason, timeout: min(20, left)))
-        }
-        let ok = !outcomes.contains(.notSent)
-        await update {
-            $0.running = false
-            if ok && outcomes.contains(.sent) { $0.lastSummaryAt = Date() }
-        }
-        return ok
+    /// The summaries alone, after the models ran.
+    func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async {
+        guard isConfigured else { return }
+        await update { $0.lastError = nil }
+        await sendSummaries(json, models: models, reason: reason, deadline: deadline)
     }
 
-    private func pushSummary(_ kind: SummaryKind, rawJson: String, models: Summary?, reason: String,
-                             timeout: TimeInterval) async -> SummaryOutcome {
+    private func sendSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async {
+        let end = Date().addingTimeInterval(deadline)
+        await update { $0.running = true }
+        var outcomes: [SummaryOutcome] = []
+        for kind in SummaryKind.allCases {
+            outcomes.append(await pushSummary(kind, rawJson: json.json(kind), models: kind == .ring ? models : nil,
+                                              reason: reason, end: end))
+        }
+        await update {
+            $0.running = false
+            if !outcomes.contains(.notSent) && outcomes.contains(.sent) { $0.lastSummaryAt = Date() }
+        }
+    }
+
+    private func pushSummary(_ kind: SummaryKind, rawJson: String?, models: Summary?, reason: String,
+                             end: Date) async -> SummaryOutcome {
         let what = "\(kind.rawValue) summary"
-        if kind == .watch, let why = HubPayload.watchSkipReason(rawJson) {
-            let first = await MainActor.run { () -> Bool in
-                defer { self.loggedWatchSkip = why }
-                return self.loggedWatchSkip != why
-            }
-            if first { dlog("hub", "\(what) not sent: \(why)") }
+        guard let rawJson else {
+            dlog("hub", "\(what) not sent: no Apple Watch data (\(reason))")
             return .skipped
         }
         let t: (summary: URL, events: URL, health: URL, token: String)
@@ -415,8 +402,13 @@ final class HubPusher: ObservableObject {
             dlog("hub", "\(what) unchanged, not sent (\(reason))")
             return .skipped
         }
+        let left = end.timeIntervalSinceNow
+        guard left > 2 else {
+            dlog("hub", "\(what) not sent: deadline (\(reason))")
+            return .notSent
+        }
         do {
-            let reply = try await HubPushEngine.send(body: body, url: t.summary, token: t.token, timeout: timeout)
+            let reply = try await HubPushEngine.send(body: body, url: t.summary, token: t.token, timeout: min(20, left))
             HubSettings.setLastSummarySha(sha, kind)
             dlog("hub", "\(what) sent: \(body.count) B, stored=\(reply["stored"] ?? "?") (\(reason))")
             return .sent
@@ -436,7 +428,7 @@ final class HubPusher: ObservableObject {
         do { t = try targets() } catch { await fail(error, "events"); return false }
         let start = Date()
         var events = 0, readings = 0, pages = 0
-        await update { $0.running = true; $0.lastError = nil }
+        await update { $0.running = true }
         while true {
             let left = deadline - Date().timeIntervalSince(start)
             guard left > 1 else { break }
@@ -472,7 +464,7 @@ final class HubPusher: ObservableObject {
         guard reader.enabled, reader.isAvailable else { return true }
         let t: (summary: URL, events: URL, health: URL, token: String)
         do { t = try targets() } catch { await fail(error, "health"); return false }
-        await update { $0.running = true; $0.lastError = nil }
+        await update { $0.running = true }
         let tz = TimeZone.current.secondsFromGMT()
         let start = Date()
         let outcome = await reader.engine.run(types: HealthReadTypes.all, deadline: deadline, tzOffsetS: tz) { body in

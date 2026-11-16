@@ -57,11 +57,12 @@ enum Core {
         let secs = TimeZone.current.secondsFromGMT()
         let tzOffset = Int64((Double(secs) / 3600).rounded())
         let json = summaryJson(dbPath: path, tzOffset: tzOffset)
-        let both = SummaryJson(ring: json, watch: watchSummaryJson(dbPath: path, tzOffset: tzOffset))
+        let watch = watchSummaryJson(dbPath: path, tzOffset: tzOffset)
+        let both = SummaryJson(ring: json, watch: watch == "null" ? nil : watch)
         guard let data = json.data(using: .utf8),
               var s = try? JSONDecoder().decode(Summary.self, from: data)
         else { return (Summary(error: "decode failed"), both) }
-        s.watch = try? JSONDecoder().decode(WatchSummary.self, from: Data(both.watch.utf8))
+        s.watch = both.watch.flatMap { try? JSONDecoder().decode(WatchSummary.self, from: Data($0.utf8)) }
         return (s, both)
     }
 }

@@ -40,7 +40,7 @@ enum AppHooks {
         // The last summary that carries model results, for the hub push below.
         let previousFull = SummaryCache.load()
         if policy.refreshSummary {
-            // Workouts from Apple Health go into the summary, so read them first.
+            // The watch summary is built from the Apple Health data, so read it first.
             if trigger != .bgRefresh { await HealthImport.shared.run() }
             let started = Date()
             let built = Core.baseWithJson()

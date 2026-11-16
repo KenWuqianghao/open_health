@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -94,12 +94,16 @@ pub fn external_path(db: &Path) -> PathBuf {
     db.parent().unwrap_or(Path::new(".")).join("external.json")
 }
 
-/// Read the external data (empty when the file is absent or malformed).
-pub fn read_external(db: &Path) -> External {
-    std::fs::read_to_string(external_path(db))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// Read the external data: empty when the file is absent, an error when it cannot be
+/// read or parsed.
+pub fn read_external(db: &Path) -> Result<External> {
+    let path = external_path(db);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(External::default()),
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("read {}", path.display()))),
+    };
+    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
 /// Replace the external data. `v` must have the shape of [`External`].

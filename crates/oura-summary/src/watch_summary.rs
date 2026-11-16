@@ -192,7 +192,7 @@ pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Option<Value>> {
 }
 
 fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
-    let external = read_external(db);
+    let external = read_external(db)?;
     let watch_nights = nights(&external.sleep);
     let workouts = health_workouts(&external.workouts);
     let fitness = external.vo2max.filter(|m| m.value > 0.0).map(|m| {

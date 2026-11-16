@@ -2032,7 +2032,7 @@ mod tests {
         demo::write_demo(&db, &demo::DemoOptions { days: 20, end_unix: ring_end, tz: 2, seed: 7 }).unwrap();
 
         let h = 3600;
-        let mut ext = external::read_external(&db);
+        let mut ext = external::read_external(&db).unwrap();
         for day in today - 20..=today {
             let local_midnight = day * 86_400 - 2 * h;
             let bed = local_midnight - h;
@@ -2108,6 +2108,8 @@ mod tests {
 
         std::fs::remove_file(external::external_path(&db)).unwrap();
         assert_eq!(build_watch_summary(&db, 2).unwrap(), None, "no Apple Watch data, no watch summary");
+        std::fs::write(external::external_path(&db), "{not json").unwrap();
+        assert!(build_watch_summary(&db, 2).is_err(), "a broken external.json is an error, not an empty summary");
         std::fs::remove_dir_all(db.parent().unwrap()).ok();
     }
 

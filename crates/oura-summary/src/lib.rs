@@ -2075,7 +2075,7 @@ mod tests {
     #[test]
     fn watch_summary_scores_every_watch_night() {
         let (db, today, ring_last_day) = ring_and_watch("watch");
-        let s = build_watch_summary(&db, 2).unwrap();
+        let s = build_watch_summary(&db, 2).unwrap().expect("the watch has nights");
         assert_eq!(s["kind"], "watch");
         assert_eq!(s["nights"].as_array().unwrap().len(), 22);
         assert_eq!(s["scores"]["latest"], extras::ymd(today));
@@ -2105,6 +2105,9 @@ mod tests {
         assert_eq!(s["sleep_debt"]["days"][13]["total_sleep_min"], 560.0, "the nap counts toward its day");
         assert_eq!(s["fitness"]["vo2max"], 44.6);
         assert!(s["workouts"].as_array().unwrap().iter().all(|w| w["source"] == "health"));
+
+        std::fs::remove_file(external::external_path(&db)).unwrap();
+        assert_eq!(build_watch_summary(&db, 2).unwrap(), None, "no Apple Watch data, no watch summary");
         std::fs::remove_dir_all(db.parent().unwrap()).ok();
     }
 

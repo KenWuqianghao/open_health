@@ -116,8 +116,7 @@ pub(crate) fn build_summary(db: &Path, tz: i64) -> Result<Value> {
 pub fn push(db: &Path, tz: i64, hub_url: &str, token: &str) -> Result<Value> {
     let mut replies = serde_json::Map::new();
     replies.insert("ring".into(), post_summary(&build_summary(db, tz)?, hub_url, token)?);
-    if oura_summary::external::external_path(db).exists() {
-        let watch = oura_summary::build_watch_summary(db, tz)?;
+    if let Some(watch) = oura_summary::build_watch_summary(db, tz)? {
         replies.insert("watch".into(), post_summary(&watch, hub_url, token)?);
     }
     Ok(replies.into())

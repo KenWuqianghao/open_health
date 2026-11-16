@@ -158,7 +158,7 @@ enum Command {
         tz_offset: i64,
     },
     /// Print the watch summary JSON, from the Apple Health data in `external.json`
-    /// next to the database (offline).
+    /// next to the database (offline). Prints `null` when there is no Apple Watch data.
     WatchSummary {
         /// Timezone offset (hours from UTC) for day boundaries.
         #[arg(long, default_value_t = 0)]
@@ -203,8 +203,8 @@ enum Command {
     },
     /// Read the real on-ring MODE/status of the data features (what's actually on).
     FeatureStatus,
-    /// Build the ring summary, and the watch summary when `external.json` is next to
-    /// the database, and push them to an always-on hub (`oura-hub`), so an agent can
+    /// Build the ring summary, and the watch summary when there is Apple Watch data
+    /// in `external.json` next to the database, and push them to an always-on hub (`oura-hub`), so an agent can
     /// read them over MCP while this machine is off.
     Push {
         /// Hub base URL, e.g. https://hub.example.com or http://100.64.0.2:8787.

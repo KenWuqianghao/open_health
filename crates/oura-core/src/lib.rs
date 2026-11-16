@@ -47,11 +47,12 @@ pub fn summary_json(db_path: String, tz_offset: i64) -> String {
 /// VO2 max and workouts, from the Apple Health data that `external_write` stores.
 /// It uses no ring data. `tz_offset` is hours from UTC.
 ///
-/// Returns the summary JSON string, or `{ "error": "…" }`.
+/// Returns the summary JSON string, `null` when there is no Apple Watch data, or
+/// `{ "error": "…" }`.
 #[uniffi::export]
 pub fn watch_summary_json(db_path: String, tz_offset: i64) -> String {
     match oura_summary::build_watch_summary(std::path::Path::new(&db_path), tz_offset) {
-        Ok(v) => v.to_string(),
+        Ok(v) => v.unwrap_or(serde_json::Value::Null).to_string(),
         Err(e) => json!({ "error": e.to_string() }).to_string(),
     }
 }

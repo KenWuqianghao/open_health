@@ -184,15 +184,27 @@ fn health_workouts(workouts: &[ExternalWorkout]) -> Vec<Workout> {
     out
 }
 
-/// The watch summary JSON. `tz` is hours from UTC. The only other input is the
-/// age in `profile.json`, which the sleep score needs.
-pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Value> {
+/// The watch summary JSON, or `None` when there is no Apple Watch night, workout or
+/// VO2 max. `tz` is hours from UTC. The only other input is the age in
+/// `profile.json`, which the sleep score needs.
+pub fn build_watch_summary(db: &Path, tz: i64) -> Result<Option<Value>> {
     build(db, tz, now_unix_s())
 }
 
-fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Value> {
+fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Option<Value>> {
     let external = read_external(db);
     let watch_nights = nights(&external.sleep);
+    let workouts = health_workouts(&external.workouts);
+    let fitness = external.vo2max.filter(|m| m.value > 0.0).map(|m| {
+        json!({
+            "vo2max": (m.value * 10.0).round() / 10.0,
+            "date": extras::ymd(extras::local_day(m.at_unix as f64, tz)),
+            "source_name": m.source,
+        })
+    });
+    if watch_nights.is_empty() && workouts.is_empty() && fitness.is_none() {
+        return Ok(None);
+    }
     let scored = score_nights(&watch_nights, tz, read_profile(db).age);
 
     let mut asleep_by_day: BTreeMap<i64, i32> = BTreeMap::new();
@@ -226,15 +238,7 @@ fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Value> {
         })
         .collect();
 
-    let fitness = external.vo2max.filter(|m| m.value > 0.0).map(|m| {
-        json!({
-            "vo2max": (m.value * 10.0).round() / 10.0,
-            "date": extras::ymd(extras::local_day(m.at_unix as f64, tz)),
-            "source_name": m.source,
-        })
-    });
-
-    Ok(json!({
+    Ok(Some(json!({
         "kind": "watch",
         "generated_at": now_unix_s as i64,
         "tz": tz,
@@ -245,8 +249,8 @@ fn build(db: &Path, tz: i64, now_unix_s: f64) -> Result<Value> {
         },
         "sleep_debt": sleep_debt_summary(&asleep_by_day),
         "fitness": fitness,
-        "workouts": extras::workouts_json(&health_workouts(&external.workouts), tz),
-    }))
+        "workouts": extras::workouts_json(&workouts, tz),
+    })))
 }
 
 #[cfg(test)]

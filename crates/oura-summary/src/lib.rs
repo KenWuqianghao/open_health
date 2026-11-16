@@ -1139,16 +1139,22 @@ fn make_digest(hrv: &VitalStat, rhr: &VitalStat) -> String {
 /// `runner` supplies the model results, if there are any. The Apple Watch data is in
 /// [`build_watch_summary`].
 pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Value> {
-    build(db, tz, runner).map(|built| built.0)
+    build(db, tz, runner, now_unix_s()).map(|built| built.0)
 }
 
 /// The daily table as CSV: one row per local day with every metric of
 /// `build_summary`, oldest day first.
 pub fn export_daily_csv(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<String> {
-    build(db, tz, runner).map(|built| extras::export_csv(&built.1))
+    build(db, tz, runner, now_unix_s()).map(|built| extras::export_csv(&built.1))
 }
 
-fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<extras::DayFact>)> {
+fn now_unix_s() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as f64).unwrap_or(0.0)
+}
+
+/// `now` is the wall clock in unix seconds: it sets today, the battery window, the
+/// data freshness and `generated_at`.
+fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Value, Vec<extras::DayFact>)> {
     let db_abs = std::fs::canonicalize(db).unwrap_or_else(|_| {
         std::env::current_dir()
             .map(|d| d.join(db))
@@ -1608,11 +1614,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     }
 
     // ── workouts from the ring and the journal ───────────────────────────────
-    let now_unix_s = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as f64)
-        .unwrap_or(anchor_unix as f64);
-    let today_idx = (now_unix_s as i64 + tz * 3600).div_euclid(86_400);
+    let today_idx = (now as i64 + tz * 3600).div_euclid(86_400);
     let sleep_windows: Vec<(i64, i64)> = nights
         .iter()
         .map(|nt| {
@@ -1910,7 +1912,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             .filter(|(at, _)| *at as f64 >= newest_point)
             .map(|(_, progress)| *progress);
     }
-    let battery_json = extras::battery(&battery_points, charging_progress, now_unix_s);
+    let battery_json = extras::battery(&battery_points, charging_progress, now);
     if let Some(latest) = battery_json["latest"]["pct"].as_f64() {
         // a read over the link can be newer than the ring's own battery events
         battery = Some((latest as i64, battery.map_or(0, |b| b.1)));
@@ -1918,10 +1920,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     let last_sync = dev.as_ref().map(|d| d.6).filter(|&t| t > 0);
     let synced_unix = last_sync.map(|t| t as f64);
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as f64)
-        .unwrap_or(anchor_unix as f64);
     let device = json!({
         "serial": dev.as_ref().map(|d| d.0.clone()),
         "hardware_id": dev.as_ref().map(|d| d.1.clone()).filter(|s| !s.is_empty()),
@@ -2077,12 +2075,10 @@ mod tests {
     #[test]
     fn ring_summary_does_not_read_apple_health() {
         let (db, _, ring_last_day) = ring_and_watch("ring-only");
-        let mut with_watch = build_summary(&db, 2, &NoModelRunner).unwrap();
+        let now = now_unix_s();
+        let with_watch = build(&db, 2, &NoModelRunner, now).unwrap().0;
         std::fs::remove_file(external::external_path(&db)).unwrap();
-        let mut without = build_summary(&db, 2, &NoModelRunner).unwrap();
-        for s in [&mut with_watch, &mut without] {
-            s["generated_at"] = Value::Null;
-        }
+        let without = build(&db, 2, &NoModelRunner, now).unwrap().0;
         assert_eq!(with_watch, without, "external.json changes nothing in the ring summary");
 
         let s = with_watch;

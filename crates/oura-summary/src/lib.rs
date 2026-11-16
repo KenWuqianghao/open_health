@@ -20,7 +20,7 @@ pub mod health_export;
 pub mod journal;
 mod nights;
 mod ring_time;
-mod watch_sleep;
+mod watch_summary;
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 
 use oura_store::storage::Store;
 use ring_time::RingClock;
+pub use watch_summary::build_watch_summary;
 
 /// User anthropometrics — only the CVA model needs them; everything else is
 /// signal-derived. Stored in an editable `profile.json` next to the DB.
@@ -874,23 +875,24 @@ fn activity_day_stats(
     days
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum NightSource {
-    Ring,
-    AppleWatch,
+/// Up to 14 nights before night `i`, never the night itself.
+fn trailing_baseline(per_night: &[Option<f64>], i: usize) -> Option<Stats> {
+    let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
+    Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())
 }
 
-fn keep_longest_night(seeds: &mut Vec<ScoreSeed>, seed: ScoreSeed) {
-    if seeds.iter().any(|s| s.wake_day == seed.wake_day && s.in_bed_s >= seed.in_bed_s) {
-        return;
-    }
-    seeds.retain(|s| s.wake_day != seed.wake_day);
-    seeds.push(seed);
+fn sleep_balance(asleep_by_day: &std::collections::BTreeMap<i64, i32>, day: i64) -> (Option<f64>, usize) {
+    let window: Vec<f64> = (day - 13..=day)
+        .filter_map(|d| asleep_by_day.get(&d).map(|&s| s as f64))
+        .filter(|&s| s > 0.0)
+        .collect();
+    let need = sleep_need_s(asleep_by_day, day) as f64;
+    let mean = (!window.is_empty()).then(|| window.iter().sum::<f64>() / window.len() as f64);
+    (mean.filter(|_| need > 0.0).map(|m| m / need), window.len())
 }
 
 /// The per-night inputs the readiness scorer needs, keyed by wake date.
 struct ScoreSeed {
-    source: NightSource,
     wake_day: i64,
     in_bed_s: f64,
     sleep: Option<scores::Score>,
@@ -1123,19 +1125,24 @@ fn make_digest(hrv: &VitalStat, rhr: &VitalStat) -> String {
     s
 }
 
-/// Assemble the full dashboard summary as a JSON value. `runner` supplies the
-/// model results, if there are any.
+/// Assemble the ring summary as a JSON value: the ring's data and the journal only.
+/// `runner` supplies the model results, if there are any. The Apple Watch data is in
+/// [`build_watch_summary`].
 pub fn build_summary(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<Value> {
-    build(db, tz, runner).map(|built| built.0)
+    build(db, tz, runner, now_unix_s()).map(|built| built.0)
 }
 
 /// The daily table as CSV: one row per local day with every metric of
 /// `build_summary`, oldest day first.
 pub fn export_daily_csv(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<String> {
-    build(db, tz, runner).map(|built| extras::export_csv(&built.1))
+    build(db, tz, runner, now_unix_s()).map(|built| extras::export_csv(&built.1))
 }
 
-fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<extras::DayFact>)> {
+fn now_unix_s() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as f64).unwrap_or(0.0)
+}
+
+fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now_unix_s: f64) -> Result<(Value, Vec<extras::DayFact>)> {
     let db_abs = std::fs::canonicalize(db).unwrap_or_else(|_| {
         std::env::current_dir()
             .map(|d| d.join(db))
@@ -1352,10 +1359,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         .collect();
     let night_hrv_all: Vec<Option<f64>> = nights.iter().map(|nt| mean(&nt.rmssd)).collect();
     let night_temp_all: Vec<Option<f64>> = nights.iter().map(|nt| nightly_skin_temp(&nt.temp)).collect();
-    let trailing = |per_night: &[Option<f64>], i: usize| -> Option<Stats> {
-        let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
-        Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())
-    };
     let mut score_seeds: Vec<ScoreSeed> = Vec::new();
     let mut night_facts: Vec<extras::NightFact> = Vec::with_capacity(nights.len());
     for (ni, nt) in nights.iter().enumerate() {
@@ -1388,9 +1391,9 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         }
         // Live scores: this night's sleep score now, the morning's readiness once the
         // day's activity is known (below).
-        let rhr_baseline = trailing(&night_rhr_all, ni);
-        let hrv_baseline = trailing(&night_hrv_all, ni);
-        let temp_baseline = trailing(&night_temp_all, ni);
+        let rhr_baseline = trailing_baseline(&night_rhr_all, ni);
+        let hrv_baseline = trailing_baseline(&night_hrv_all, ni);
+        let temp_baseline = trailing_baseline(&night_temp_all, ni);
         let night_sleep_score = scores::sleep::score_night(scores::sleep::NightInput {
             asleep_min: (asleep_s > 0).then(|| asleep_s as f64 / 60.0),
             in_bed_min: Some(in_bed_s / 60.0),
@@ -1406,25 +1409,21 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             hrv_baseline,
             age: demo.age,
         });
-        keep_longest_night(
-            &mut score_seeds,
-            ScoreSeed {
-                source: NightSource::Ring,
-                wake_day,
-                in_bed_s,
-                sleep: night_sleep_score.clone(),
-                rhr: night_rhr_all[ni],
-                rhr_baseline,
-                hrv: night_hrv_all[ni],
-                hrv_baseline,
-                temp_deviation: match (night_temp_all[ni], temp_baseline) {
-                    (Some(t), Some(b)) => Some(t - b.mean),
-                    _ => None,
-                },
-                temp_baseline,
-                recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
+        score_seeds.push(ScoreSeed {
+            wake_day,
+            in_bed_s,
+            sleep: night_sleep_score.clone(),
+            rhr: night_rhr_all[ni],
+            rhr_baseline,
+            hrv: night_hrv_all[ni],
+            hrv_baseline,
+            temp_deviation: match (night_temp_all[ni], temp_baseline) {
+                (Some(t), Some(b)) => Some(t - b.mean),
+                _ => None,
             },
-        );
+            temp_baseline,
+            recovery: recovery_fraction(&nt.hr_t, nt.start_ds, nt.end_ds),
+        });
         let temp_dev = match (night_temp_all[ni], temp_baseline) {
             (Some(t), Some(b)) => Some(((t - b.mean) * 100.0).round() / 100.0),
             _ => None,
@@ -1511,57 +1510,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             "sleep_score": night_sleep_score.as_ref().map(|s| s.score),
         }));
     }
-    let external = external::read_external(db);
-    let watch_nights = watch_sleep::nights(&external.sleep);
-    let watch_rhr: Vec<Option<f64>> = watch_nights.iter().map(|n| n.min_hr).collect();
-    let watch_hrv: Vec<Option<f64>> = watch_nights.iter().map(|n| n.mean_hrv_sdnn_ms).collect();
-    for (wi, wn) in watch_nights.iter().enumerate() {
-        let wake_day = (wn.end_unix + tz * 3600).div_euclid(86_400);
-        if watch_sleep::ring_recorded(wn, night_facts.iter().map(|n| (n.start_unix, n.end_unix))) {
-            continue;
-        }
-        let in_bed_s = (wn.end_unix - wn.start_unix) as f64;
-        let (metrics, asleep_s) = sleep_metrics(&wn.stages, in_bed_s);
-        *asleep_by_day.entry(wake_day).or_default() += asleep_s;
-        let share = |code: i64| {
-            let n = wn.stages.iter().filter(|&&c| c == code).count();
-            (n as f64 / wn.stages.len() as f64 * 1000.0).round() / 10.0
-        };
-        let rhr_baseline = trailing(&watch_rhr, wi);
-        let hrv_baseline = trailing(&watch_hrv, wi);
-        let sleep = scores::sleep::score_night(scores::sleep::NightInput {
-            asleep_min: Some(asleep_s as f64 / 60.0),
-            in_bed_min: None,
-            efficiency_pct: None,
-            onset_latency_min: None,
-            waso_min: metrics["waso_min"].as_f64(),
-            awakenings: metrics["awakenings"].as_f64(),
-            deep_pct: Some(share(1)),
-            rem_pct: Some(share(3)),
-            rhr: wn.min_hr,
-            rhr_baseline,
-            hrv_ms: wn.mean_hrv_sdnn_ms,
-            hrv_baseline,
-            age: demo.age,
-        });
-        keep_longest_night(
-            &mut score_seeds,
-            ScoreSeed {
-                source: NightSource::AppleWatch,
-                wake_day,
-                in_bed_s,
-                sleep,
-                rhr: wn.min_hr,
-                rhr_baseline,
-                hrv: wn.mean_hrv_sdnn_ms,
-                hrv_baseline,
-                temp_deviation: None,
-                temp_baseline: None,
-                recovery: None,
-            },
-        );
-    }
-
     extras::mark_main(&mut night_facts);
     for (night, fact) in nights_json.iter_mut().zip(&night_facts) {
         night["kind"] = json!(if fact.main { "main" } else { "nap" });
@@ -1650,11 +1598,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         }
     }
 
-    // ── workouts from the ring, Apple Health and the journal ─────────────────
-    let now_unix_s = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as f64)
-        .unwrap_or(anchor_unix as f64);
     let today_idx = (now_unix_s as i64 + tz * 3600).div_euclid(86_400);
     let sleep_windows: Vec<(i64, i64)> = nights
         .iter()
@@ -1676,7 +1619,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     };
     let merged = extras::merge_workouts(
         ring_workouts,
-        &external,
         &journal,
         &met_min,
         &beats,
@@ -1737,15 +1679,10 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     let active_kcal_on = |day: i64| daily.get(&ymd_of(day)).map(|e| e.0);
     let mean_of = |vals: &[f64]| (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64);
     let mut score_days: std::collections::BTreeMap<i64, serde_json::Map<String, Value>> = Default::default();
-    for seed in &score_seeds {
-        let day = seed.wake_day;
-        // 14-day sleep vs need (asleep_by_day only has nights with stages)
-        let sleep_window: Vec<f64> = (day - 13..=day)
-            .filter_map(|d| asleep_by_day.get(&d).map(|&s| s as f64))
-            .filter(|&s| s > 0.0)
-            .collect();
-        let need = sleep_need_s(&asleep_by_day, day) as f64;
-        let sleep_balance_ratio = mean_of(&sleep_window).filter(|_| need > 0.0).map(|m| m / need);
+    let main_seeds = extras::longest_per_wake_day(score_seeds.iter().map(|s| (s.wake_day, s.in_bed_s)));
+    for (&day, &i) in &main_seeds {
+        let seed = &score_seeds[i];
+        let (sleep_balance_ratio, sleep_balance_days) = sleep_balance(&asleep_by_day, day);
         let prior_kcal: Vec<f64> = (day - 15..day).filter_map(active_kcal_on).collect();
         let week_kcal: Vec<f64> = (day - 7..day).filter_map(active_kcal_on).collect();
         let activity_balance_ratio = match (mean_of(&week_kcal), mean_of(&prior_kcal)) {
@@ -1763,24 +1700,15 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
             temp_deviation_c: seed.temp_deviation,
             temp_baseline: seed.temp_baseline,
             sleep_balance_ratio,
-            sleep_balance_days: sleep_window.len(),
+            sleep_balance_days,
             prev_day_active_kcal: active_kcal_on(day - 1).filter(|_| !resting),
             active_kcal_baseline: Stats::of(&prior_kcal).filter(|_| !resting),
             recovery_fraction: seed.recovery,
             activity_balance_ratio: activity_balance_ratio.filter(|_| !resting),
         });
-        let mut sleep = score_json(&seed.sleep);
-        let mut readiness = score_json(&readiness);
-        if seed.source == NightSource::AppleWatch {
-            for score in [&mut sleep, &mut readiness] {
-                if let Value::Object(fields) = score {
-                    fields.insert("source".into(), json!("apple_watch"));
-                }
-            }
-        }
         let entry = score_days.entry(day).or_default();
-        entry.insert("sleep".into(), sleep);
-        entry.insert("readiness".into(), readiness);
+        entry.insert("sleep".into(), score_json(&seed.sleep));
+        entry.insert("readiness".into(), score_json(&readiness));
     }
     for (&day, stats) in &day_stats {
         if stats.minutes < 30 || rest_days.contains(&day) {
@@ -1977,10 +1905,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
     let last_sync = dev.as_ref().map(|d| d.6).filter(|&t| t > 0);
     let synced_unix = last_sync.map(|t| t as f64);
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as f64)
-        .unwrap_or(anchor_unix as f64);
     let device = json!({
         "serial": dev.as_ref().map(|d| d.0.clone()),
         "hardware_id": dev.as_ref().map(|d| d.1.clone()).filter(|s| !s.is_empty()),
@@ -1989,7 +1913,7 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         "mac": dev.as_ref().map(|d| d.4.clone()).filter(|s| !s.is_empty()),
         "synced": synced_unix.map(|s| date_label(s, tz)),
         "synced_hm": synced_unix.map(|s| hm(s, tz)),
-        "fresh_hours": synced_unix.map(|s| ((now - s) / 3600.0 * 10.0).round() / 10.0),
+        "fresh_hours": synced_unix.map(|s| ((now_unix_s - s) / 3600.0 * 10.0).round() / 10.0),
         "days_of_data": ((clock.total_span_ds() as f64 / 10.0 / 86400.0) * 10.0).round() / 10.0,
         "total_events": events.len(),
         "nights": nights.len(),
@@ -2047,19 +1971,11 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
         // A cache for other readers. A read-only seed database cannot take it.
         let _ = store.upsert_daily(serial, &rows);
     }
-    let fitness = match &external.vo2max {
-        Some(measured) if measured.value > 0.0 => json!({
-            "vo2max": (measured.value * 10.0).round() / 10.0,
-            "source": "measured",
-            "source_name": measured.source,
-            "date": extras::ymd(extras::local_day(measured.at_unix as f64, tz)),
-            "estimate": (vo2max * 10.0).round() / 10.0,
-        }),
-        _ => json!({ "vo2max": (vo2max * 10.0).round() / 10.0, "source": "formula" }),
-    };
+    let fitness = json!({ "vo2max": (vo2max * 10.0).round() / 10.0, "source": "formula" });
 
     let summary = json!({
-        "generated_at": now,
+        "kind": "ring",
+        "generated_at": now_unix_s,
         "tz": tz,
         "digest": digest,
         "device": device,
@@ -2107,9 +2023,8 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner) -> Result<(Value, Vec<ext
 mod tests {
     use super::*;
 
-    #[test]
-    fn watch_nights_score_the_mornings_without_a_ring_night() {
-        let dir = std::env::temp_dir().join(format!("oura-summary-watch-{}", std::process::id()));
+    fn ring_and_watch(name: &str) -> (PathBuf, i64, i64) {
+        let dir = std::env::temp_dir().join(format!("oura-summary-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("oura.db");
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
@@ -2117,9 +2032,9 @@ mod tests {
         let ring_end = now - 4 * 86_400;
         demo::write_demo(&db, &demo::DemoOptions { days: 20, end_unix: ring_end, tz: 2, seed: 7 }).unwrap();
 
-        let mut sleep = external::ExternalSleep::default();
+        let h = 3600;
+        let mut ext = external::read_external(&db).unwrap();
         for day in today - 20..=today {
-            let h = 3600;
             let local_midnight = day * 86_400 - 2 * h;
             let bed = local_midnight - h;
             for (a, b, stage) in [
@@ -2129,29 +2044,74 @@ mod tests {
                 (4 * h, 4 * h + 600, external::SleepStage::Awake),
                 (4 * h + 600, 8 * h, external::SleepStage::Core),
             ] {
-                sleep.stages.push(external::ExternalSleepStage { start_unix: bed + a, end_unix: bed + b, stage });
+                ext.sleep.stages.push(external::ExternalSleepStage { start_unix: bed + a, end_unix: bed + b, stage });
             }
-            sleep.hr.push((bed + 2 * h, 50.0 + (day % 3) as f64));
-            sleep.hrv_sdnn.push((bed + 3 * h, 45.0 + (day % 4) as f64));
+            ext.sleep.hr.push((bed + 2 * h, 50.0 + (day % 3) as f64));
+            ext.sleep.hrv_sdnn.push((bed + 3 * h, 45.0 + (day % 4) as f64));
         }
-        let mut ext = external::read_external(&db);
-        ext.sleep = sleep;
+        let nap = today * 86_400 - 2 * h + 14 * h;
+        ext.sleep.stages.push(external::ExternalSleepStage { start_unix: nap, end_unix: nap + 90 * 60, stage: external::SleepStage::Core });
         external::write_external(&db, &serde_json::to_value(&ext).unwrap()).unwrap();
+        (db, today, (ring_end + 7200) / 86_400)
+    }
 
-        let s = build_summary(&db, 2, &NoModelRunner).unwrap();
-        let days = &s["scores"]["days"];
-        for day in today - 2..=today {
-            let d = &days[extras::ymd(day)];
-            assert_eq!(d["sleep"]["source"], "apple_watch", "{}: {d}", extras::ymd(day));
-            assert!(d["sleep"]["score"].as_f64().is_some_and(|x| x > 60.0), "{d}");
-            assert_eq!(d["readiness"]["source"], "apple_watch", "{d}");
+    #[test]
+    fn ring_summary_does_not_read_apple_health() {
+        let (db, _, ring_last_day) = ring_and_watch("ring-only");
+        let now = now_unix_s();
+        let with_watch = build(&db, 2, &NoModelRunner, now).unwrap().0;
+        std::fs::remove_file(external::external_path(&db)).unwrap();
+        let without = build(&db, 2, &NoModelRunner, now).unwrap().0;
+        assert_eq!(with_watch, without, "external.json changes nothing in the ring summary");
+
+        let s = with_watch;
+        assert_eq!(s["kind"], "ring");
+        assert!(!s.to_string().contains("apple_watch"));
+        assert_eq!(s["scores"]["latest"], extras::ymd(ring_last_day));
+        assert_eq!(s["fitness"]["source"], "formula");
+        assert!(s["workouts"].as_array().unwrap().iter().all(|w| w["source"] != "health"));
+        std::fs::remove_dir_all(db.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn watch_summary_scores_every_watch_night() {
+        let (db, today, ring_last_day) = ring_and_watch("watch");
+        let s = build_watch_summary(&db, 2).unwrap().expect("the watch has nights");
+        assert_eq!(s["kind"], "watch");
+        assert_eq!(s["nights"].as_array().unwrap().len(), 22);
+        assert_eq!(s["scores"]["latest"], extras::ymd(today));
+        let days = s["scores"]["days"].as_object().unwrap();
+        assert_eq!(days.len(), 21, "the ring days have a watch score too");
+        assert!(days[&extras::ymd(ring_last_day)]["sleep"]["score"].is_number());
+
+        let today_nights: Vec<&Value> =
+            s["nights"].as_array().unwrap().iter().filter(|n| n["ymd"] == extras::ymd(today)).collect();
+        assert_eq!(today_nights.len(), 2);
+        let main = today_nights.iter().max_by_key(|n| n["in_bed_min"].as_f64().unwrap() as i64).unwrap();
+        let d = &days[&extras::ymd(today)];
+        assert_eq!(d["sleep"]["score"], main["sleep_score"], "the nap does not replace the night: {d}");
+        assert!(d["sleep"]["score"].as_f64().is_some_and(|x| x > 60.0), "{d}");
+        let keys: std::collections::BTreeSet<&str> = d["readiness"]["contributors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["key"].as_str())
+            .collect();
+        assert_eq!(keys.into_iter().collect::<Vec<_>>(), ["hrv_balance", "previous_night", "resting_hr", "sleep_balance"], "{d}");
+        for d in days.values() {
             let keys: Vec<&str> = d["sleep"]["contributors"].as_array().unwrap().iter().filter_map(|c| c["key"].as_str()).collect();
             assert!(!keys.contains(&"efficiency"), "the Watch does not measure time in bed: {keys:?}");
         }
-        let ring_day = &days[extras::ymd((ring_end + 7200) / 86_400 - 2)];
-        assert!(ring_day["sleep"]["score"].is_number(), "{ring_day}");
-        assert!(ring_day["sleep"]["source"].is_null(), "the ring night wins: {ring_day}");
-        assert_eq!(s["scores"]["latest"], extras::ymd(today));
+
+        assert_eq!(s["sleep_debt"]["days"][13]["total_sleep_min"], 560.0, "the nap counts toward its day");
+        assert_eq!(s["fitness"]["vo2max"], 44.6);
+        assert!(s["workouts"].as_array().unwrap().iter().all(|w| w["source"] == "health"));
+
+        std::fs::remove_file(external::external_path(&db)).unwrap();
+        assert_eq!(build_watch_summary(&db, 2).unwrap(), None, "no Apple Watch data, no watch summary");
+        std::fs::write(external::external_path(&db), "{not json").unwrap();
+        assert!(build_watch_summary(&db, 2).is_err(), "a broken external.json is an error, not an empty summary");
+        std::fs::remove_dir_all(db.parent().unwrap()).ok();
     }
 
     #[test]
@@ -2181,14 +2141,14 @@ mod tests {
         assert!(s["illness"]["nightsignal"]["recent"].as_array().is_some_and(|r| r.len() == 14));
         // the demo rings score their own main nights
         assert_eq!(main["stage_source"], "ring");
-        assert_eq!(s["fitness"]["source"], "measured");
+        assert_eq!(s["fitness"]["source"], "formula");
         let sources: std::collections::BTreeSet<&str> = s["workouts"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|w| w["source"].as_str())
             .collect();
-        assert_eq!(sources.into_iter().collect::<Vec<_>>(), ["health", "manual", "ring_met"]);
+        assert_eq!(sources.into_iter().collect::<Vec<_>>(), ["manual", "ring_met"]);
         let alcohol = s["correlations"]["tags"].as_array().unwrap().iter().find(|t| t["tag"] == "alcohol").unwrap();
         let hrv = alcohol["effects"].as_array().unwrap().iter().find(|e| e["metric"] == "hrv").unwrap();
         assert!(hrv["delta"].as_f64().unwrap() < -4.0, "{hrv}");

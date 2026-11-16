@@ -374,7 +374,7 @@ struct ProfileSettingsView: View {
                 } header: {
                     Text("Apple Watch and other apps")
                 } footer: {
-                    Text("Workouts and the measured VO₂ max from your Apple Watch or another app show in the app and count for your activity. Apple Watch sleep gives the scores of a morning without a ring night. What Open Oura wrote to Health itself is left out.")
+                    Text("Workouts and the measured VO₂ max from your Apple Watch or another app show next to the ring's. Apple Watch sleep gives the scores of a morning without a ring night. What Open Oura wrote to Health itself is left out.")
                 }
 
                 Section {

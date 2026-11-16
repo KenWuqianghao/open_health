@@ -13,6 +13,17 @@ protocol SummaryPlugin {
     func clearCache()
 }
 
+extension SummaryPlugin {
+    /// `enrich` with the watch summary of `base` kept: the plugin is closed source and
+    /// can return a `Summary` without it.
+    func enrichKeepingWatch(_ base: Summary, previous: Summary?,
+                            progress: @escaping @Sendable (String) -> Void) -> Summary {
+        var full = enrich(base, previous: previous, progress: progress)
+        full.watch = base.watch
+        return full
+    }
+}
+
 enum Plugins {
     static let summary: SummaryPlugin? = (NSClassFromString("OpenHealthSummaryPlugin") as? NSObject.Type)
         .flatMap { $0.init() as? SummaryPlugin }

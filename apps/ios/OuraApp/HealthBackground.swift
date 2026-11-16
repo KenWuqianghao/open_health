@@ -66,7 +66,7 @@ final class HealthBackground {
     init(push: HealthWake.Push? = nil) {
         wake = HealthWake(push: push ?? { reason in
             let task = await MainActor.run { KeepAlive.begin("hk-wake") }
-            await HubPusher.shared.pushHealth(reason: reason, deadline: HealthBackground.deadline)
+            await HubPusher.shared.pushHealthPass(reason: reason, deadline: HealthBackground.deadline)
             await MainActor.run { KeepAlive.end(task) }
         })
     }

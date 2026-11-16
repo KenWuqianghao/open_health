@@ -4,8 +4,8 @@ import WidgetKit
 /// Builds the widget snapshot from a summary and tells WidgetKit to draw again.
 enum SnapshotWriter {
     static func snapshot(from s: Summary) -> Snapshot? {
-        guard s.error == nil, let day = s.days.first else { return nil }
-        let score = { (kind: ScoreKind) in s.latestScore(kind, upTo: day) }
+        guard s.error == nil, let day = s.ringDays.first else { return nil }
+        let score = { (kind: ScoreKind) in s.latestRingScore(kind, upTo: day) }
         let readiness = score(.readiness)
         let night = s.night(forDay: day)
         let battery = s.device?.battery?.value

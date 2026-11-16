@@ -99,15 +99,11 @@ struct ScoreContributor: Codable, Identifiable {
     var source: String
     var id: String { key }
 }
-enum ScoreSource: String, Codable {
-    case appleWatch = "apple_watch"
-}
 struct DailyScore: Codable {
     var score: Double
     var contributors: [ScoreContributor] = []
     var provisional: Bool = false
     var basis: String?
-    var source: ScoreSource?
 }
 /// The three scores of one wake date. Any of them can be missing.
 struct DayScores: Codable {
@@ -173,10 +169,14 @@ struct WorkoutSession: Identifiable, Codable {
 struct Cardio: Codable { var vascular_age: Double?; var chronological_age: Double?; var pwv_ms: Double?; var segments: Int? }
 struct Fitness: Codable {
     var vo2max: Double?
-    /// "measured" (Apple Health) or "formula" (age, sex and weight).
-    var source: String? = nil
     var source_name: String? = nil
     var date: String? = nil
+}
+struct WatchSummary: Codable {
+    var scores: Scores?
+    var fitness: Fitness?
+    var workouts: Lenient<[WorkoutEntry]>? = nil
+    var error: String?
 }
 struct SleepDebtDay: Codable, Identifiable {
     var date: String
@@ -272,6 +272,7 @@ struct Summary: Codable {
     var journal: Lenient<JournalData>? = nil
     var restMode: Lenient<RestModeInfo>? = nil
     var rulesIllness: Lenient<RulesIllness>? = nil
+    var watch: WatchSummary? = nil
     var illness: IllnessResult?           // on-device only (Symptom Radar; not in the JSON)
     var workouts: [WorkoutSession] = []   // on-device only (not in the JSON)
     var modelErrors: [String] = []        // on-device model failures (not in the JSON)
@@ -280,7 +281,7 @@ struct Summary: Codable {
     // out of decoding.
     enum CodingKeys: String, CodingKey {
         case digest, device, nights, vitals, activity_profile, activity_daily, profile, cardio, fitness, error, scores
-        case stress, resilience, guidance, reports, correlations, cycle, journal
+        case stress, resilience, guidance, reports, correlations, cycle, journal, watch
         case sleepDebt = "sleep_debt"
         case entries = "workouts"
         case restMode = "rest_mode"
@@ -315,8 +316,26 @@ extension Summary {
     var days: [String] {
         var set = Set(activity_profile.keys)
         for n in nights { if let w = wakeYmd(n) { set.insert(w) } }
+        set.formUnion(scoredDays)
+        return set.sorted(by: >)
+    }
+
+    /// The days with ring data. A view that shows ring fields for one day picks its day here.
+    var ringDays: [String] {
+        var set = Set(activity_profile.keys)
+        for n in nights { if let w = wakeYmd(n) { set.insert(w) } }
         if let scored = scores?.days.keys { set.formUnion(scored) }
         return set.sorted(by: >)
+    }
+
+    var scoredDays: Set<String> {
+        Set(scores.map { Array($0.days.keys) } ?? []).union(watch?.scores.map { Array($0.days.keys) } ?? [])
+    }
+
+    func shownScore(_ kind: ScoreKind, day: String) -> (score: DailyScore, fromWatch: Bool)? {
+        if let ring = scores?.days[day]?.score(kind) { return (ring, false) }
+        if let watch = watch?.scores?.days[day]?.score(kind) { return (watch, true) }
+        return nil
     }
 
     // the primary sleep you woke from on the morning of `day` — the longest in-bed night
@@ -505,7 +524,7 @@ extension Summary {
     func highlight(for day: String) -> String? {
         var sentences: [String] = []
         var first: String?
-        if let r = latestScore(.readiness, upTo: day)?.score.score {
+        if let r = scores?.days[day]?.readiness?.score {
             switch r {
             case 85...: first = "You're well recovered"
             case 70..<85: first = "You're reasonably recovered"
@@ -527,7 +546,12 @@ extension Summary {
 
     /// The score of `kind` for `day`, or the newest earlier day that has one — so a
     /// morning without a night still shows the last readiness, labelled with its date.
-    func latestScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {
+    func latestScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore, fromWatch: Bool)? {
+        scoredDays.filter { $0 <= day }.sorted(by: >)
+            .lazy.compactMap { d in shownScore(kind, day: d).map { (d, $0.score, $0.fromWatch) } }.first
+    }
+
+    func latestRingScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {
         guard let days = scores?.days else { return nil }
         return days.keys.filter { $0 <= day }.sorted(by: >)
             .lazy.compactMap { d in days[d]?.score(kind).map { (d, $0) } }.first

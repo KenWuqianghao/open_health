@@ -16,7 +16,6 @@ use oura_analysis::scores::Stats;
 use serde_json::{json, Map, Value};
 
 use crate::civil;
-use crate::external::External;
 use crate::journal::{parse_day, Journal};
 use crate::nights::EventRow;
 
@@ -79,19 +78,33 @@ pub(crate) struct NightFact {
     pub main: bool,
 }
 
-/// Mark the main sleep of each wake day. Call once after all facts exist.
-pub(crate) fn mark_main(nights: &mut [NightFact]) {
+/// The longest sleep of each wake day, as `wake_day -> index`; the earlier one on a
+/// tie. `sleeps` gives `(wake_day, in_bed)` per sleep.
+pub(crate) fn longest_per_wake_day(sleeps: impl IntoIterator<Item = (i64, f64)>) -> BTreeMap<i64, usize> {
     let mut longest: BTreeMap<i64, (usize, f64)> = BTreeMap::new();
-    for (i, n) in nights.iter().enumerate() {
-        if n.in_bed_min < 180.0 {
-            continue;
-        }
-        if longest.get(&n.wake_day).is_none_or(|l| n.in_bed_min > l.1) {
-            longest.insert(n.wake_day, (i, n.in_bed_min));
+    for (i, (day, in_bed)) in sleeps.into_iter().enumerate() {
+        if longest.get(&day).is_none_or(|&(_, l)| in_bed > l) {
+            longest.insert(day, (i, in_bed));
         }
     }
-    for (i, _) in longest.values() {
-        nights[*i].main = true;
+    longest.into_iter().map(|(day, (i, _))| (day, i)).collect()
+}
+
+/// Which sleeps are main sleeps: the longest of its wake day, with 3 hours or more
+/// in bed. Other sleeps are naps. `sleeps` gives `(wake_day, in_bed_min)` per sleep.
+pub(crate) fn main_sleeps(sleeps: &[(i64, f64)]) -> Vec<bool> {
+    let mut main = vec![false; sleeps.len()];
+    for i in longest_per_wake_day(sleeps.iter().copied()).into_values() {
+        main[i] = sleeps[i].1 >= 180.0;
+    }
+    main
+}
+
+/// Mark the main sleep of each wake day. Call once after all facts exist.
+pub(crate) fn mark_main(nights: &mut [NightFact]) {
+    let main = main_sleeps(&nights.iter().map(|n| (n.wake_day, n.in_bed_min)).collect::<Vec<_>>());
+    for (night, main) in nights.iter_mut().zip(main) {
+        night.main = main;
     }
 }
 
@@ -506,41 +519,20 @@ pub(crate) struct WorkoutResult {
     pub credited_min: BTreeMap<i64, f64>,
 }
 
-/// One list of workouts from the ring, Apple Health and the journal.
-///
-/// A ring session that overlaps an entry from Apple Health or the journal by half
-/// or more is dropped: the entry names the same activity. When an entry reports
-/// more active energy than the ring measured in its time, the day gets the
-/// difference (the ring was off the finger, or on a bicycle handlebar).
+/// A ring session that overlaps a journal entry by half or more is dropped: the entry
+/// names the same activity.
 pub(crate) fn merge_workouts(
     ring: Vec<Workout>,
-    external: &External,
     journal: &Journal,
     met_min: &BTreeMap<i64, f64>,
     beats: &[Beat],
     weight_kg: f64,
     tz: i64,
 ) -> WorkoutResult {
-    let mut entries: Vec<Workout> = external
+    let mut entries: Vec<Workout> = journal
         .workouts
         .iter()
-        .filter(|w| w.end_unix > w.start_unix)
         .map(|w| Workout {
-            id: format!("health-{}", w.id),
-            start_unix: w.start_unix as f64,
-            end_unix: w.end_unix as f64,
-            label: w.label.clone(),
-            source: "health",
-            source_name: if w.source.is_empty() { "Apple Health".into() } else { w.source.clone() },
-            active_kcal: w.active_kcal,
-            distance_m: w.distance_m,
-            avg_hr: w.avg_hr,
-            max_hr: w.max_hr,
-            note: String::new(),
-        })
-        .collect();
-    for w in &journal.workouts {
-        let manual = Workout {
             id: format!("manual-{}", w.id),
             start_unix: w.start_unix as f64,
             end_unix: w.start_unix as f64 + w.duration_min * 60.0,
@@ -552,12 +544,8 @@ pub(crate) fn merge_workouts(
             avg_hr: None,
             max_hr: None,
             note: w.note.clone(),
-        };
-        // an Apple Health entry of the same activity wins over the manual one
-        if !entries.iter().any(|e| e.overlap(&manual) >= 0.5 * manual.minutes()) {
-            entries.push(manual);
-        }
-    }
+        })
+        .collect();
 
     let mut credited_kcal: BTreeMap<i64, f64> = BTreeMap::new();
     let mut credited_min: BTreeMap<i64, f64> = BTreeMap::new();
@@ -1114,18 +1102,16 @@ mod tests {
             max_hr: None,
             note: String::new(),
         }];
-        let external: External = serde_json::from_value(json!({ "workouts": [
-            { "id": "a", "start_unix": 36_000, "end_unix": 37_800, "label": "Run",
-              "active_kcal": 300.0, "avg_hr": 150.0, "source": "Apple Watch" },
-            { "id": "b", "start_unix": 50_000, "end_unix": 53_600, "label": "Swim",
-              "active_kcal": 400.0 },
+        let journal: Journal = serde_json::from_value(json!({ "workouts": [
+            { "id": "a", "start_unix": 36_000, "duration_min": 30.0, "label": "Run", "active_kcal": 300.0 },
+            { "id": "b", "start_unix": 50_000, "duration_min": 60.0, "label": "Swim", "active_kcal": 400.0 },
         ]}))
         .unwrap();
         // the ring measured 5 MET above rest during the run, nothing during the swim
         let met: BTreeMap<i64, f64> = (600..630).map(|m| (m, 5.0)).collect();
-        let r = merge_workouts(ring, &external, &Journal::default(), &met, &[], 70.0, 0);
+        let r = merge_workouts(ring, &journal, &met, &[], 70.0, 0);
         assert_eq!(r.workouts.len(), 2);
-        assert!(r.workouts.iter().all(|w| w.source == "health"));
+        assert!(r.workouts.iter().all(|w| w.source == "manual"));
         // run: ring 5 × 70 / 60 × 30 = 175 kcal, entry 300 → 125; swim: 400
         assert_eq!(r.credited_kcal[&0].round(), 525.0);
         assert_eq!(r.credited_min[&0], 60.0);

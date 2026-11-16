@@ -72,8 +72,7 @@ enum AppHooks {
         // 5. Models: only with a generous budget and a healthy device. The foreground
         //    path runs them from RootView.load instead.
         if let plugin = Plugins.summary, policy.runModels, trigger == .bgProcessing, let base = summary, modelGate() {
-            var full = plugin.enrich(base, previous: previousFull, progress: { _ in })
-            full.watch = base.watch
+            let full = plugin.enrichKeepingWatch(base, previous: previousFull, progress: { _ in })
             SummaryCache.save(full)
             Notifier.shared.evaluate(full)
             await HealthExporter.shared.run(.modelsUpdated, summary: full)

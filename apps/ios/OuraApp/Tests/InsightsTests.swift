@@ -37,7 +37,7 @@ final class InsightsTests: XCTestCase {
     }
 
     func testTheRingScoreWinsAndTheWatchScoreFillsAMorningWithoutOne() throws {
-        let score = { (v: Int) in "{\"score\":\(v),\"contributors\":[]}" }
+        let score = { (v: Int) in "{\"score\":\(v),\"contributors\":[],\"provisional\":false}" }
         var s = try summary("""
         {"scores":{"days":{"2026-09-26":{"sleep":\(score(80)),"readiness":\(score(75))}}},
          "workouts":[{"id":"manual-a","day":"2026-09-26","start":"2026-09-26 07:15","end":"2026-09-26 07:45",

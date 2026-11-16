@@ -1,7 +1,3 @@
-//! The watch summary: Apple Watch nights, scores, sleep debt, VO2 max and workouts,
-//! from `external.json` only. It never reads the ring's rows; the ring summary is
-//! [`crate::build_summary`].
-
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -82,11 +78,9 @@ pub fn nights(sleep: &ExternalSleep) -> Vec<WatchNight> {
         .collect()
 }
 
-/// One watch night with its sleep score and the inputs its morning's readiness needs.
 struct ScoredNight<'a> {
     night: &'a WatchNight,
     wake_day: i64,
-    /// The longest night of its wake day; the others are naps.
     main: bool,
     asleep_s: i32,
     sleep: Option<scores::Score>,
@@ -121,8 +115,6 @@ impl ScoredNight<'_> {
     }
 }
 
-/// Scores every night. The min HR and SDNN baselines come from the main nights only:
-/// a nap's heart rate is higher than a night's.
 fn score_nights(nights: &[WatchNight], tz: i64, age: f64) -> Vec<ScoredNight<'_>> {
     let wake_day = |n: &WatchNight| extras::local_day(n.end_unix as f64, tz);
     let mut main = vec![false; nights.len()];

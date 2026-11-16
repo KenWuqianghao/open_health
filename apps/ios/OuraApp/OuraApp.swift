@@ -866,7 +866,6 @@ struct RootView: View {
             }
             if let plugin {
                 var full = plugin.enrich(base, previous: previous, progress: progress)
-                // The plugin is closed source and can return a summary without `watch`.
                 full.watch = base.watch
                 HubPusher.shared.schedule(json: built.json, models: full, reason: "foreground")
                 DispatchQueue.main.async { finishLoad(generation, summary: full) }

@@ -167,14 +167,11 @@ struct WorkoutSession: Identifiable, Codable {
     var startHM: String { String(start.suffix(5)) }        // HH:MM
 }
 struct Cardio: Codable { var vascular_age: Double?; var chronological_age: Double?; var pwv_ms: Double?; var segments: Int? }
-/// The ring summary has the estimate from age, sex and weight; the watch summary has
-/// the measured value with its date and source.
 struct Fitness: Codable {
     var vo2max: Double?
     var source_name: String? = nil
     var date: String? = nil
 }
-/// The watch summary (`oura_summary::build_watch_summary`): Apple Watch data only.
 struct WatchSummary: Codable {
     var scores: Scores?
     var fitness: Fitness?
@@ -275,7 +272,6 @@ struct Summary: Codable {
     var journal: Lenient<JournalData>? = nil
     var restMode: Lenient<RestModeInfo>? = nil
     var rulesIllness: Lenient<RulesIllness>? = nil
-    /// From `watch_summary_json`, next to the ring summary.
     var watch: WatchSummary? = nil
     var illness: IllnessResult?           // on-device only (Symptom Radar; not in the JSON)
     var workouts: [WorkoutSession] = []   // on-device only (not in the JSON)
@@ -324,12 +320,10 @@ extension Summary {
         return set.sorted(by: >)
     }
 
-    /// The days with a ring or a watch score.
     var scoredDays: Set<String> {
         Set(scores.map { Array($0.days.keys) } ?? []).union(watch?.scores.map { Array($0.days.keys) } ?? [])
     }
 
-    /// The score of `kind` that the app shows for `day`: the ring's, else the watch's.
     func shownScore(_ kind: ScoreKind, day: String) -> (score: DailyScore, fromWatch: Bool)? {
         if let ring = scores?.days[day]?.score(kind) { return (ring, false) }
         if let watch = watch?.scores?.days[day]?.score(kind) { return (watch, true) }
@@ -549,8 +543,6 @@ extension Summary {
             .lazy.compactMap { d in shownScore(kind, day: d).map { (d, $0.score, $0.fromWatch) } }.first
     }
 
-    /// `latestScore` without the watch: for the widget and the highlight, which have
-    /// no Apple Watch mark.
     func latestRingScore(_ kind: ScoreKind, upTo day: String) -> (day: String, score: DailyScore)? {
         guard let days = scores?.days else { return nil }
         return days.keys.filter { $0 <= day }.sorted(by: >)

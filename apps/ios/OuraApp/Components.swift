@@ -815,7 +815,6 @@ struct ScoreDetailView: View {
     let kind: ScoreKind
     let day: String
     let score: DailyScore?
-    /// True when `score` is the watch's, because the ring has no score for the day.
     var fromWatch = false
     var history: [DatedValue] = []
     @State private var showSources = false

@@ -33,8 +33,6 @@ enum HubSettings {
             if let v = newValue, !v.isEmpty { Keychain.save(v, account: tokenAccount) } else { Keychain.delete(account: tokenAccount) }
         }
     }
-    /// SHA-256 of the last body of each summary kind the hub accepted; an unchanged one
-    /// is not sent again.
     static func lastSummarySha(_ kind: SummaryKind) -> String? {
         d.string(forKey: "\(shaKey).\(kind.rawValue)")
     }
@@ -147,12 +145,10 @@ enum HubError: LocalizedError, Equatable {
     }
 }
 
-/// The two summaries that `ingest/summary` takes. The JSON of each has its `kind`.
 enum SummaryKind: String, CaseIterable {
     case ring, watch
 }
 
-/// The JSON strings of one summary build, as the shared core returned them.
 struct SummaryJson {
     var ring: String
     var watch: String
@@ -165,10 +161,6 @@ struct SummaryJson {
     }
 }
 
-/// A summary body: the full `build_summary` JSON from the shared core with the
-/// on-device model results folded in. The Swift `Summary` struct drops fields the
-/// agent tools need (`generated_at`, `tz`, night `metrics`), so the raw JSON is the
-/// base and is never re-encoded from the struct.
 enum HubPayload {
     static func build(rawJson: String, models: Summary?) throws -> Data {
         guard let data = rawJson.data(using: .utf8),
@@ -227,9 +219,6 @@ enum HubPayload {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Why the watch summary is not sent, or nil to send it: the core reported an
-    /// error, or there is no night, no workout and no VO2 max (a phone without
-    /// Apple Watch data). The CLI skips the watch push for the same reason.
     static func watchSkipReason(_ rawJson: String) -> String? {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(rawJson.utf8))) as? [String: Any] else { return nil }
         if let e = root["error"] as? String { return "error: \(e)" }
@@ -296,14 +285,12 @@ final class HubPusher: ObservableObject {
     /// Rows per page. About 1 MB of hex per page at most.
     static let page: UInt32 = 1000
 
-    /// `skipped`: unchanged or nothing to send. `notSent`: failed or out of time.
     private enum SummaryOutcome { case sent, skipped, notSent }
 
     @Published var enabled: Bool { didSet { HubSettings.enabled = enabled } }
     @Published var url: String { didSet { HubSettings.url = url } }
     @Published private(set) var hasToken: Bool
     @Published private(set) var status = HubPushStatus()
-    /// The last reason the watch summary was skipped, so each reason is logged once.
     @MainActor private var loggedWatchSkip: String?
 
     private init() {
@@ -340,8 +327,6 @@ final class HubPusher: ObservableObject {
         await update { $0.lastError = text; $0.running = false }
     }
 
-    /// Everything after a sync: the summaries, then the new raw rows. `deadline` bounds
-    /// the whole call; a page that did not go out is sent next time.
     func pushAll(json: SummaryJson?, models: Summary?, reason: String, deadline: TimeInterval) async {
         guard isConfigured else { return }
         let start = Date()
@@ -387,10 +372,6 @@ final class HubPusher: ObservableObject {
         pushNow()
     }
 
-    /// The ring summary with the model results folded in, then the watch summary.
-    /// Both share `deadline`; each send gets what is left of it, at most 20 s. The
-    /// error is cleared once per pass, so a sent watch summary does not hide a failed
-    /// ring one. The summary time moves only when no kind failed or ran out of time.
     @discardableResult
     func pushSummaries(_ json: SummaryJson, models: Summary?, reason: String, deadline: TimeInterval) async -> Bool {
         let start = Date()

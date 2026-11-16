@@ -875,9 +875,6 @@ fn activity_day_stats(
     days
 }
 
-/// The main night of each wake day, as `wake_day -> index` into `nights`: the longest
-/// time in bed, the earlier night on a tie. The other nights of the day are naps.
-/// `nights` gives `(wake_day, in_bed)` per night.
 fn main_night_per_wake_day(nights: impl IntoIterator<Item = (i64, f64)>) -> std::collections::BTreeMap<i64, usize> {
     let mut main: std::collections::BTreeMap<i64, (usize, f64)> = Default::default();
     for (i, (day, in_bed)) in nights.into_iter().enumerate() {
@@ -888,14 +885,11 @@ fn main_night_per_wake_day(nights: impl IntoIterator<Item = (i64, f64)>) -> std:
     main.into_iter().map(|(day, (i, _))| (day, i)).collect()
 }
 
-/// The personal baseline for night `i`: up to 14 nights before it, never the night itself.
 fn trailing_baseline(per_night: &[Option<f64>], i: usize) -> Option<Stats> {
     let lo = i.saturating_sub(SCORE_BASELINE_NIGHTS);
     Stats::of(&per_night[lo..i].iter().filter_map(|x| *x).collect::<Vec<_>>())
 }
 
-/// Sleep balance on `day`: the mean sleep of the 14 days up to it against the sleep
-/// need, and the number of days with sleep in that window.
 fn sleep_balance(asleep_by_day: &std::collections::BTreeMap<i64, i32>, day: i64) -> (Option<f64>, usize) {
     let window: Vec<f64> = (day - 13..=day)
         .filter_map(|d| asleep_by_day.get(&d).map(|&s| s as f64))
@@ -1157,8 +1151,6 @@ fn now_unix_s() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as f64).unwrap_or(0.0)
 }
 
-/// `now` is the wall clock in unix seconds: it sets today, the battery window, the
-/// data freshness and `generated_at`.
 fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Value, Vec<extras::DayFact>)> {
     let db_abs = std::fs::canonicalize(db).unwrap_or_else(|_| {
         std::env::current_dir()
@@ -1615,7 +1607,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
         }
     }
 
-    // ── workouts from the ring and the journal ───────────────────────────────
     let today_idx = (now as i64 + tz * 3600).div_euclid(86_400);
     let sleep_windows: Vec<(i64, i64)> = nights
         .iter()
@@ -2041,8 +2032,6 @@ fn build(db: &Path, tz: i64, runner: &dyn ModelRunner, now: f64) -> Result<(Valu
 mod tests {
     use super::*;
 
-    /// A demo ring that stops 4 days ago, and Apple Watch nights for each of the last
-    /// 21 mornings: a night, and on the latest day also a 90 min afternoon nap.
     fn ring_and_watch(name: &str) -> (PathBuf, i64, i64) {
         let dir = std::env::temp_dir().join(format!("oura-summary-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -348,10 +348,6 @@ extension Summary {
         rulesIllness?.value?.nightsignal.flatMap { $0.current ? $0 : nil }
     }
 
-    /// Every workout, newest first: the ring summary's, then the watch summary's,
-    /// each with its source. The on-device activity model's sessions replace the
-    /// rule-based ring sessions of the ring summary; a journal entry wins over a ring
-    /// session of the same time.
     var mergedWorkouts: [WorkoutEntry] {
         (ringWorkouts + (watch?.workouts?.value ?? [])).sorted { $0.start_unix > $1.start_unix }
     }

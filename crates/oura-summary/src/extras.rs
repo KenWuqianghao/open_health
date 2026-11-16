@@ -505,12 +505,6 @@ pub(crate) struct WorkoutResult {
     pub credited_min: BTreeMap<i64, f64>,
 }
 
-/// One list of workouts from the ring and the journal.
-///
-/// A ring session that overlaps a journal entry by half or more is dropped: the
-/// entry names the same activity. When an entry reports more active energy than
-/// the ring measured in its time, the day gets the difference (the ring was off
-/// the finger, or on a bicycle handlebar).
 pub(crate) fn merge_workouts(
     ring: Vec<Workout>,
     journal: &Journal,

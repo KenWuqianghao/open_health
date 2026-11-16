@@ -113,9 +113,6 @@ pub(crate) fn build_summary(db: &Path, tz: i64) -> Result<Value> {
     }
 }
 
-/// POST the ring summary to an `oura-hub`, then the watch summary when `external.json`
-/// is next to the DB. Without that file this machine has no watch data, and an empty
-/// watch summary would replace the one the phone pushed. Returns the hub's replies by kind.
 pub fn push(db: &Path, tz: i64, hub_url: &str, token: &str) -> Result<Value> {
     let mut replies = serde_json::Map::new();
     replies.insert("ring".into(), post_summary(&build_summary(db, tz)?, hub_url, token)?);

@@ -47,9 +47,6 @@ enum Core {
     /// shared-core JSON — safe to compute on a background queue and show immediately.
     static func base() -> Summary { baseWithJson().summary }
 
-    /// `base()` plus the JSON strings of the ring and the watch summary it was decoded
-    /// from. The hub push sends the strings: the Swift structs drop fields the agent
-    /// tools read.
     static func baseWithJson() -> (summary: Summary, json: SummaryJson) {
         let path = DB.readPath()   // synced DB if present, else the bundled seed
         // the phone's actual UTC offset, so night labels / sleep windows / digest

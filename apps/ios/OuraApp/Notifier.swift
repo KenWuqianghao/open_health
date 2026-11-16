@@ -102,14 +102,12 @@ enum NotificationRules {
             }
         }
 
-        // the scores of this morning, once per day; the Apple Watch's when the ring has none
-        if isOn(.scoresReady), let readiness = s.shownScore(.readiness, day: today), plan.state.scoresDay != today {
-            let day = readiness.fromWatch ? s.watch?.scores?.days[today] : s.scores?.days[today]
-            let sleep = day?.sleep.map { " Sleep score \(Int($0.score.rounded()))." } ?? ""
-            let score = Int(readiness.score.score.rounded())
-            let source = readiness.fromWatch ? "Readiness \(score) (Apple Watch). " : ""
+        // the scores of this morning, once per day
+        if isOn(.scoresReady), let readiness = s.scores?.days[today]?.readiness, plan.state.scoresDay != today {
+            let sleep = s.scores?.days[today]?.sleep.map { " Sleep score \(Int($0.score.rounded()))." } ?? ""
+            let score = Int(readiness.score.rounded())
             plan.now.append(.init(id: "scores-\(today)", title: "Readiness \(score), \(Snapshot.band(score))",
-                                  body: source + (s.highlight(for: today) ?? "Your morning scores are ready.") + sleep))
+                                  body: (s.highlight(for: today) ?? "Your morning scores are ready.") + sleep))
             plan.state.scoresDay = today
         }
 

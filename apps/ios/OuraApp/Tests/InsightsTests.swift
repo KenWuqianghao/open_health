@@ -64,32 +64,6 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(s.mergedWorkouts.map(\.source), ["health", "manual"])
     }
 
-    func testTheMorningNotificationUsesTheWatchReadinessOnlyWithoutARingOne() throws {
-        let score = { (v: Int) in "{\"score\":\(v),\"contributors\":[],\"provisional\":false}" }
-        let watch = try JSONDecoder().decode(WatchSummary.self, from: Data("""
-        {"kind":"watch","scores":{"days":{"\(today)":{"sleep":\(score(70)),"readiness":\(score(71))}}}}
-        """.utf8))
-        let on: (NotificationKind) -> Bool = { $0 == .scoresReady }
-
-        var watchOnly = try summary("{}")
-        watchOnly.watch = watch
-        let fromWatch = try XCTUnwrap(NotificationRules.plan(summary: watchOnly, state: NotifierState(), lastSync: nil,
-                                                             now: now, isOn: on).now.first)
-        XCTAssertTrue(fromWatch.title.hasPrefix("Readiness 71"))
-        XCTAssertTrue(fromWatch.body.contains("Readiness 71 (Apple Watch)"), fromWatch.body)
-        XCTAssertTrue(fromWatch.body.contains("Sleep score 70."), fromWatch.body)
-
-        var both = try summary("""
-        {"scores":{"days":{"\(today)":{"sleep":\(score(80)),"readiness":\(score(75))}}}}
-        """)
-        both.watch = watch
-        let fromRing = try XCTUnwrap(NotificationRules.plan(summary: both, state: NotifierState(), lastSync: nil,
-                                                            now: now, isOn: on).now.first)
-        XCTAssertTrue(fromRing.title.hasPrefix("Readiness 75"))
-        XCTAssertFalse(fromRing.body.contains("Apple Watch"), fromRing.body)
-        XCTAssertTrue(fromRing.body.contains("Sleep score 80."), fromRing.body)
-    }
-
     func testLowBatteryNotifiesOncePerDischarge() throws {
         let s = try summary("""
         {"device":{"battery_pct":18,"battery":{"latest":{"t":1789999000,"pct":18},"history":[],

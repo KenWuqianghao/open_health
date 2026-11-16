@@ -873,8 +873,12 @@ struct RootView: View {
                     finishLoad(generation, summary: full)
                 }
             } else {
-                HubPusher.shared.schedule(json: built.json, models: previous ?? base, reason: "foreground")
-                DispatchQueue.main.async { finishLoad(generation, summary: nil) }
+                DispatchQueue.main.async {
+                    if generation == loadGeneration {
+                        HubPusher.shared.schedule(json: built.json, models: previous ?? base, reason: "foreground")
+                    }
+                    finishLoad(generation, summary: nil)
+                }
             }
         }
     }

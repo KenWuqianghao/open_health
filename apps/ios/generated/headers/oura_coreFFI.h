@@ -437,6 +437,11 @@ int64_t uniffi_oura_core_fn_func_store_schema_version(RustBuffer db_path, RustCa
 RustBuffer uniffi_oura_core_fn_func_summary_json(RustBuffer db_path, int64_t tz_offset, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WATCH_SUMMARY_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WATCH_SUMMARY_JSON
+RustBuffer uniffi_oura_core_fn_func_watch_summary_json(RustBuffer db_path, int64_t tz_offset, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WRITE_DEMO_DB
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_FN_FUNC_WRITE_DEMO_DB
 void uniffi_oura_core_fn_func_write_demo_db(RustBuffer db_path, uint32_t days, int64_t tz_offset, RustCallStatus *_Nonnull out_status
@@ -791,6 +796,12 @@ uint16_t uniffi_oura_core_checksum_func_store_schema_version(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_SUMMARY_JSON
 #define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_SUMMARY_JSON
 uint16_t uniffi_oura_core_checksum_func_summary_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_WATCH_SUMMARY_JSON
+#define UNIFFI_FFIDEF_UNIFFI_OURA_CORE_CHECKSUM_FUNC_WATCH_SUMMARY_JSON
+uint16_t uniffi_oura_core_checksum_func_watch_summary_json(void
     
 );
 #endif

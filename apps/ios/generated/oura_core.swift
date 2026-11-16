@@ -2740,8 +2740,8 @@ public func exportDailyCsv(dbPath: String, tzOffset: Int64)throws  -> String {
 })
 }
 /**
- * Replace the data from other sources (Apple Health workouts, measured VO2 max)
- * that the summary reads. `json` has the shape of `oura_summary::external::External`.
+ * Replace the Apple Health data (sleep stages, heart rate, HRV, workouts, measured
+ * VO2 max) that the watch summary reads. `json` has the shape of `oura_summary::external::External`.
  */
 public func externalWrite(dbPath: String, json: String)throws  {try rustCallWithError(FfiConverterTypeDataError.lift) {
     uniffi_oura_core_fn_func_external_write(
@@ -2835,8 +2835,8 @@ public func storeSchemaVersion(dbPath: String) -> Int64 {
 })
 }
 /**
- * The full dashboard summary — the SAME `build_summary()` JSON the web client
- * renders, computed from the synced SQLite DB. `tz_offset` is hours from UTC.
+ * The ring summary — the SAME `build_summary()` JSON the web client renders,
+ * computed from the synced SQLite DB and the journal. `tz_offset` is hours from UTC.
  *
  * The summary uses [`oura_summary::NoModelRunner`]: the signal-derived panels
  * (vitals, cardio trend, activity profile, device & data-health, digest) and the
@@ -2848,6 +2848,21 @@ public func storeSchemaVersion(dbPath: String) -> Int64 {
 public func summaryJson(dbPath: String, tzOffset: Int64) -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_oura_core_fn_func_summary_json(
+        FfiConverterString.lower(dbPath),
+        FfiConverterInt64.lower(tzOffset),$0
+    )
+})
+}
+/**
+ * The watch summary: Apple Watch nights, sleep and readiness scores, sleep debt,
+ * VO2 max and workouts, from the Apple Health data that `external_write` stores.
+ * It uses no ring data. `tz_offset` is hours from UTC.
+ *
+ * Returns the summary JSON string, or `{ "error": "…" }`.
+ */
+public func watchSummaryJson(dbPath: String, tzOffset: Int64) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_oura_core_fn_func_watch_summary_json(
         FfiConverterString.lower(dbPath),
         FfiConverterInt64.lower(tzOffset),$0
     )
@@ -2890,7 +2905,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_oura_core_checksum_func_export_daily_csv() != 32910) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_oura_core_checksum_func_external_write() != 12447) {
+    if (uniffi_oura_core_checksum_func_external_write() != 19203) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_health_samples_json() != 14620) {
@@ -2914,7 +2929,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_oura_core_checksum_func_store_schema_version() != 1450) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_oura_core_checksum_func_summary_json() != 14892) {
+    if (uniffi_oura_core_checksum_func_summary_json() != 61453) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_oura_core_checksum_func_watch_summary_json() != 8483) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_write_demo_db() != 63621) {

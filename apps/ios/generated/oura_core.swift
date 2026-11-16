@@ -2858,7 +2858,8 @@ public func summaryJson(dbPath: String, tzOffset: Int64) -> String {
  * VO2 max and workouts, from the Apple Health data that `external_write` stores.
  * It uses no ring data. `tz_offset` is hours from UTC.
  *
- * Returns the summary JSON string, or `{ "error": "…" }`.
+ * Returns the summary JSON string, `null` when there is no Apple Watch data, or
+ * `{ "error": "…" }`.
  */
 public func watchSummaryJson(dbPath: String, tzOffset: Int64) -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
@@ -2932,7 +2933,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_oura_core_checksum_func_summary_json() != 61453) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_oura_core_checksum_func_watch_summary_json() != 8483) {
+    if (uniffi_oura_core_checksum_func_watch_summary_json() != 14786) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_oura_core_checksum_func_write_demo_db() != 63621) {

@@ -52,7 +52,8 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         case armed(CBPeripheral?)
         /// A sync holds the link.
         case owned(SyncTrigger, BLETransport)
-        /// The link is kept after a sync (`LinkPolicy.park`); nobody drives it.
+        /// The link is kept after a sync (`LinkPolicy.park`), or an armed connect
+        /// completed; nobody drives it.
         case parked(CBPeripheral)
     }
     private(set) var ownership: Ownership = .free
@@ -479,34 +480,57 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     func release(_ transport: BLETransport, policy: LinkPolicy, holdOff: TimeInterval = 0) {
         let p = transport.peripheral
         lock.lock()
-        if case .owned(_, let t) = ownership, t === transport { ownership = .free }
+        var rearm = false
+        switch ownership {
+        case .owned(_, let t) where t === transport:
+            ownership = .free
+        case .parked(let q) where q.identifier == p.identifier:
+            ownership = .free
+        case .armed:
+            // `cancelPeripheralConnection` below also cancels the pending connect.
+            rearm = true
+        default:
+            break
+        }
         holdOffUntil = holdOff > 0 ? Date().addingTimeInterval(holdOff) : .distantPast
         lock.unlock()
+        if rearm { disarm() }
         transport.detach()
         switch policy {
-        case .park where p.state == .connected:
+        case .park where p.state == .connected && !rearm:
             park(p)
         default:
-            central.cancelPeripheralConnection(p)
+            // After `disarm()`, a second cancel could remove an arm that its
+            // disconnect callback made in between.
+            if !rearm { central.cancelPeripheralConnection(p) }
             dlog("ble", "disconnected — ring link released (\(policy.rawValue))")
             arm()
         }
     }
 
-    /// The ring came back but no sync is due. Keep a parked link as it is; with the
-    /// release policy drop it and wait `holdOff` before arming again.
+    /// The ring came back but no sync is due. Under the park policy keep a subscribed
+    /// link as it is; drop any other link and wait `holdOff` before arming again.
     func settle(policy: LinkPolicy, holdOff requested: TimeInterval) {
         // A shorter start delay than this hides an ignored delay from `didConnect`.
         let holdOff = max(requested, 2 * Self.ignoredStartDelayThreshold)
         lock.lock()
         guard case .parked(let p) = ownership else { lock.unlock(); return }
-        if policy == .park { lock.unlock(); return }
+        // A link from the armed connect has no subscriptions, so the ring cannot wake
+        // the app over it. A cancel before power-on does nothing.
+        if policy == .park, central.state != .poweredOn || Self.isSubscribed(p) { lock.unlock(); return }
         ownership = .free
         holdOffUntil = Date().addingTimeInterval(holdOff)
         lock.unlock()
         central.cancelPeripheralConnection(p)
         dlog("ble", "disconnected — no sync due, re-arm in \(Int(holdOff)) s")
         arm()
+    }
+
+    static func isSubscribed(_ p: CBPeripheral) -> Bool {
+        guard let chars = p.services?.first(where: { $0.uuid == RingUUID.service })?.characteristics
+        else { return false }
+        let notify = chars.filter { RingUUID.notify.contains($0.uuid.uuidString.uppercased()) }
+        return !notify.isEmpty && notify.allSatisfy(\.isNotifying)
     }
 
     private func park(_ p: CBPeripheral) {

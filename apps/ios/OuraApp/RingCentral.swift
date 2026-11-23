@@ -497,10 +497,12 @@ final class RingCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         if rearm { disarm() }
         transport.detach()
         switch policy {
-        case .park where p.state == .connected:
+        case .park where p.state == .connected && !rearm:
             park(p)
         default:
-            central.cancelPeripheralConnection(p)
+            // After `disarm()`, a second cancel could remove an arm that its
+            // disconnect callback made in between.
+            if !rearm { central.cancelPeripheralConnection(p) }
             dlog("ble", "disconnected — ring link released (\(policy.rawValue))")
             arm()
         }

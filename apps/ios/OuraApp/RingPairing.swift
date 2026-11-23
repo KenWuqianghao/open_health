@@ -105,6 +105,7 @@ final class RingPairing: ObservableObject {
     private func openLink(_ cand: RingCandidate) async throws {
         let central = RingCentral.shared
         guard let p = central.pairedPeripheralFor(id: cand.id) else { throw BLEError.notFound }
+        if central.isArmed { central.disarm() }
         try await central.connect(p, timeout: 30)
         let t = central.claim(p, for: .postPair)
         transport = t
@@ -200,6 +201,8 @@ final class RingPairing: ObservableObject {
         if let t = transport {
             RingCentral.shared.release(t, policy: .release)
             transport = nil
+        } else {
+            RingCentral.shared.arm()
         }
     }
 

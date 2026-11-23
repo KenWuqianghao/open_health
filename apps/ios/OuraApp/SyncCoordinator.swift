@@ -210,6 +210,7 @@ actor SyncCoordinator {
         var cancelReason: SyncExit?
     }
     private var current: Run?
+    private var missedWake: CBPeripheral?
     var hooks = SyncHooks()
 
     private static let lastSuccessKey = "ring.last-successful-sync-at"
@@ -287,7 +288,8 @@ actor SyncCoordinator {
 
     func handleUnsolicitedConnect(_ peripheral: CBPeripheral) {
         guard current == nil else {
-            dlog("sync", "unsolicited connect while busy — ignored")
+            dlog("sync", "unsolicited connect while busy — checked after the run")
+            missedWake = peripheral
             return
         }
         let streak = failureStreak
@@ -300,6 +302,17 @@ actor SyncCoordinator {
         }
         let transport = RingCentral.shared.claim(peripheral, for: .bleRestore)
         Task { _ = await self.sync(trigger: .bleRestore, reuse: transport) }
+    }
+
+    private func settleMissedWake() {
+        guard let p = missedWake else { return }
+        missedWake = nil
+        guard let parked = RingCentral.shared.parkedPeripheral, parked.identifier == p.identifier,
+              parked.state == .connected, !RingCentral.isSubscribed(parked) else { return }
+        let streak = failureStreak
+        let wait = Self.wakeHoldOff(now: Date(), lastSuccessAt: lastSuccessAt,
+                                    failedRunsInARow: streak.runs, lastFailureAt: streak.lastAt)
+        RingCentral.shared.settle(policy: .release, holdOff: wait)
     }
 
     /// Cancel the run in flight. `session.cancel()` returns within one poll; the
@@ -399,6 +412,7 @@ actor SyncCoordinator {
             KeepAlive.end(keepAlive)
         }
         current = nil
+        settleMissedWake()
         return try result.get()
     }
 
@@ -430,6 +444,7 @@ actor SyncCoordinator {
             metrics.detail = "no auth key in the Keychain (locked phone before first unlock, or not paired)"
             if let reuse { RingCentral.shared.release(reuse, policy: SyncSettings.linkPolicy) }
             current = nil
+            settleMissedWake()
             record(metrics)
             return .skipped(metrics.exit)
         }
@@ -575,6 +590,7 @@ actor SyncCoordinator {
         record(metrics)
         await RingSync.shared.end(outcome: outcome)
         current = nil
+        settleMissedWake()
         return outcome
     }
 

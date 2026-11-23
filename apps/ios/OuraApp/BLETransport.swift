@@ -91,11 +91,9 @@ final class BLETransport: NSObject, RingTransport, CBPeripheralDelegate, @unchec
     /// True when a previous session already discovered the service and subscribed
     /// every notify characteristic (a parked link).
     private var alreadySubscribed: Bool {
-        guard let svc = peripheral.services?.first(where: { $0.uuid == RingUUID.service }),
-              let chars = svc.characteristics else { return false }
-        let notify = chars.filter { RingUUID.notify.contains($0.uuid.uuidString.uppercased()) }
-        guard let w = chars.first(where: { $0.uuid == RingUUID.write }), !notify.isEmpty,
-              notify.allSatisfy(\.isNotifying) else { return false }
+        guard RingCentral.isSubscribed(peripheral),
+              let w = peripheral.services?.first(where: { $0.uuid == RingUUID.service })?
+                .characteristics?.first(where: { $0.uuid == RingUUID.write }) else { return false }
         writeChar = w
         return true
     }
